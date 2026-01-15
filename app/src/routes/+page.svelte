@@ -3,6 +3,8 @@
   import FileList from "$lib/components/FileList.svelte";
   import SystemInfo from "$lib/components/SystemInfo.svelte";
   import Controls from "$lib/components/Controls.svelte";
+  import SettingsModal from "$lib/components/SettingsModal.svelte";
+
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
@@ -12,6 +14,7 @@
   let files: any[] = [];
   let isScanning = false;
   let scanCounter = 0;
+  let showSettings = false;
 
   // Drag state
   let isDragging = false;
@@ -227,6 +230,7 @@
   }
   function handleSettings() {
     console.log("Settings clicked");
+    showSettings = true;
   }
 </script>
 
@@ -302,6 +306,9 @@
         </div>
       </div>
     </div>
+  {/if}
+  {#if showSettings}
+    <SettingsModal close={() => (showSettings = false)} />
   {/if}
 </main>
 
