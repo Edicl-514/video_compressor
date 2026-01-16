@@ -40,4 +40,5 @@ doc.md
 
 
 压缩.py
+get_vmaf_score.py
 /test

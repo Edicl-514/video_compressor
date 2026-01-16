@@ -244,15 +244,16 @@
                     <!-- Dynamic Input for Selected Mode -->
                     <div class="mode-value-input">
                         {#if config.compressionMode === CompressionMode.BITRATE}
-                            <label>Bitrate (kbps)</label>
+                            <label for="target-bitrate">Bitrate (kbps)</label>
                             <input
+                                id="target-bitrate"
                                 type="number"
                                 bind:value={config.targetBitrate}
                                 min="100"
                                 step="100"
                             />
                         {:else if config.compressionMode === CompressionMode.CRF}
-                            <label>CRF Value (0-51)</label>
+                            <label for="target-crf">CRF Value (0-51)</label>
                             <div class="slider-row">
                                 <input
                                     type="range"
@@ -260,8 +261,10 @@
                                     min="0"
                                     max="51"
                                     step="1"
+                                    aria-label="CRF Value Slider"
                                 />
                                 <input
+                                    id="target-crf"
                                     type="number"
                                     bind:value={config.targetCRF}
                                     min="0"
@@ -270,13 +273,75 @@
                                 />
                             </div>
                         {:else if config.compressionMode === CompressionMode.VMAF}
-                            <label>Target VMAF (0-100)</label>
+                            <label for="target-vmaf">Target VMAF (0-100)</label>
                             <input
+                                id="target-vmaf"
                                 type="number"
                                 bind:value={config.targetVMAF}
                                 min="0"
                                 max="100"
                             />
+                        {/if}
+                    </div>
+
+                    <div class="mode-extra-settings">
+                        {#if config.compressionMode === CompressionMode.BITRATE}
+                            <div class="extra-setting">
+                                <label for="bypass-threshold">
+                                    Bypass Threshold (kbps)
+                                    <span
+                                        class="tooltip"
+                                        title="Skip processing if input video bitrate is lower than this value"
+                                        >ℹ️</span
+                                    >
+                                </label>
+                                <input
+                                    type="number"
+                                    id="bypass-threshold"
+                                    bind:value={config.minBitrateThreshold}
+                                    min="0"
+                                    step="100"
+                                    placeholder="0 (Disabled)"
+                                />
+                            </div>
+                        {:else if config.compressionMode === CompressionMode.CRF}
+                            <div class="extra-setting">
+                                <label class="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        bind:checked={config.crfAutoSkip}
+                                    />
+                                    Auto-skip if output larger than input
+                                    <span
+                                        class="tooltip"
+                                        title="Stops processing early if detected output bitrate is significantly higher than original"
+                                        >ℹ️</span
+                                    >
+                                </label>
+                            </div>
+                            {#if config.crfAutoSkip}
+                                <div
+                                    class="extra-setting"
+                                    style="margin-top: 8px;"
+                                >
+                                    <label for="crf-threshold">
+                                        Skip Threshold (%)
+                                        <span
+                                            class="tooltip"
+                                            title="Skip if output bitrate > input bitrate * threshold / 100"
+                                            >ℹ️</span
+                                        >
+                                    </label>
+                                    <input
+                                        type="number"
+                                        id="crf-threshold"
+                                        bind:value={config.crfAutoSkipThreshold}
+                                        min="10"
+                                        max="500"
+                                        step="5"
+                                    />
+                                </div>
+                            {/if}
                         {/if}
                     </div>
                 </div>
@@ -829,6 +894,24 @@
             transform: translate(-50%, 0);
             opacity: 1;
         }
+    }
+
+    .mode-extra-settings {
+        margin-top: 10px;
+        border-top: 1px solid #333;
+        padding-top: 10px;
+    }
+
+    .extra-setting {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .tooltip {
+        cursor: help;
+        font-size: 0.8rem;
+        opacity: 0.7;
     }
 
     .form-group-row {

@@ -78,6 +78,17 @@ pub struct CompressionConfig {
     pub available_video_encoders: Vec<EncoderConfig>,
     pub available_audio_encoders: Vec<EncoderConfig>,
     pub custom_filters: Vec<String>,
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default)]
+    #[serde(rename = "minBitrateThreshold")]
+    pub min_bitrate_threshold: u32,
+    #[serde(default)]
+    #[serde(rename = "crfAutoSkip")]
+    pub crf_auto_skip: bool,
+    #[serde(default)]
+    #[serde(rename = "crfAutoSkipThreshold")]
+    pub crf_auto_skip_threshold: u32,
 }
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v"];
@@ -260,13 +271,15 @@ fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> 
     let height = video_stream["height"].as_u64().unwrap_or(0);
     let resolution = format!("{}x{}", width, height);
 
-    let bitrate = format["bit_rate"]
+    let bitrate_raw: Option<f64> = format["bit_rate"]
         .as_str()
-        .map(|s| {
-            let b: f64 = s.parse().unwrap_or(0.0);
-            format!("{:.1} Mbps", b / 1_000_000.0)
-        })
+        .and_then(|s| s.parse().ok());
+
+    let bitrate = bitrate_raw
+        .map(|b| format!("{:.1} Mbps", b / 1_000_000.0))
         .unwrap_or_else(|| "N/A".to_string());
+    
+    let bitrate_kbps = bitrate_raw.map(|b| b / 1000.0);
 
     let codec = video_stream["codec_name"]
         .as_str()
@@ -287,7 +300,7 @@ fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> 
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0),
         speed: None,
-        bitrate_kbps: None,
+        bitrate_kbps,
     })
 }
 
@@ -323,11 +336,64 @@ pub fn process_video(
     pids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
     cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>
 ) -> Result<(), String> {
+    // 0. Resolve ffprobe path
+    let ffprobe_path = if let Some(parent_dir) = std::path::Path::new(ffmpeg_path).parent() {
+        let ffmpeg_path_buf = std::path::Path::new(ffmpeg_path);
+        let ffprobe_name = if let Some(ext) = ffmpeg_path_buf.extension() {
+            if ext.to_string_lossy().eq_ignore_ascii_case("exe") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            }
+        } else {
+            if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }
+        };
+        parent_dir.join(ffprobe_name).to_string_lossy().to_string()
+    } else {
+        "ffprobe".to_string()
+    };
+
+    // 1. Get Input Info for Bitrate Analysis
+    let input_info = get_video_info(Path::new(&input_path), &ffprobe_path).ok();
+    let input_bitrate_kbps = input_info.as_ref().and_then(|i| i.bitrate_kbps);
+
+    // 2. Bitrate Bypass Check
+    if config.compression_mode == "bitrate" && config.min_bitrate_threshold > 0 {
+        if let Some(br) = input_bitrate_kbps {
+             if br < config.min_bitrate_threshold as f64 {
+                // SKIP!
+                println!("Skipping {} because bitrate {:.2} < threshold {}", input_path, br, config.min_bitrate_threshold);
+                
+                // Copy if needed
+                if input_path != output_path {
+                     if let Some(parent) = std::path::Path::new(&output_path).parent() {
+                        if !parent.exists() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                    }
+                    if let Err(e) = std::fs::copy(&input_path, &output_path) {
+                        return Err(format!("Skipped (bitrate check), but failed to copy file: {}", e));
+                    }
+                }
+
+                // If input == output, we effectively did nothing, which is correct (metadata preserved).
+                
+                let _ = app.emit("video-progress", ProgressPayload {
+                    path: input_path.clone(),
+                    progress: 100,
+                    status: "Skipped".to_string(),
+                    speed: 0.0,
+                    bitrate_kbps: br,
+                    output_info: input_info,
+                });
+                return Ok(());
+             }
+        }
+    }
+
     let mut args = Vec::new();
     args.push("-y".to_string());
     args.push("-hide_banner".to_string());
-    // -progress pipe:1 is useful but parsing stderr is standard human readable.
-    // ffmpeg outputs progress to stderr by default.
     args.push("-i".to_string());
     args.push(input_path.clone());
 
@@ -343,24 +409,18 @@ pub fn process_video(
             args.push(format!("{}k", config.target_bitrate));
         },
         "crf" => {
-            // CRF is usually for x264/x265/svt-av1.
-            // Check if encoder supports CRF? Most do.
             if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
                  args.push("-crf".to_string());
                  args.push(format!("{}", config.target_crf));
             } else if v_enc.contains("nvenc") {
-                // NVENC usually uses -cq for CRF-like
                  args.push("-cq".to_string());
                  args.push(format!("{}", config.target_crf));
-                 // Also need -rc vbr or constqp?
             } else {
-                 // Fallback to bitrate or qscale? 
                  args.push("-q:v".to_string());
                  args.push(format!("{}", config.target_crf));
             }
         },
         "vmaf" => {
-            // Fallback to CRF for now as VMAF is not fully implemented in this phase
             args.push("-crf".to_string());
              args.push("23".to_string()); 
         },
@@ -375,18 +435,12 @@ pub fn process_video(
     // Resolution
     if config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
         args.push("-vf".to_string());
-        // scale=w:h:force_original_aspect_ratio=decrease
-        // This ensures it fits within box, preserving aspect ratio.
         args.push(format!("scale='min({},iw)':-2", config.max_resolution.width));
     }
 
-    // Custom Filters/Params
+    // Custom Filters
     for filter in config.custom_filters {
         if !filter.trim().is_empty() {
-            // Assume filter is a raw arg for now, or -vf? 
-            // The instruction says "custom filters (extra general parameters)". 
-            // So we treat them as raw args.
-            // But if it's multiple words?
              let parts: Vec<&str> = filter.split_whitespace().collect();
              for p in parts {
                  args.push(p.to_string());
@@ -394,11 +448,7 @@ pub fn process_video(
         }
     }
     
-    // Add specific encoder params if found in available_video_encoders?
-    // The frontend passes available_video_encoders but that's for UI. 
-    // The strict "custom parameters" for *selected* encoder are not explicitly in CompressionConfig top level?
-    // Ah, EncoderConfig has `custom_params`.
-    // We should find the selected encoder config in the list.
+    // Encoder Specific Params
     if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
         for param in &enc_cfg.custom_params {
              let parts: Vec<&str> = param.split_whitespace().collect();
@@ -422,16 +472,13 @@ pub fn process_video(
         args.push(format!("{}", config.ffmpeg_threads));
     }
 
-    // Force ffmpeg to emit progress in a machine-readable format to stderr
     args.push("-progress".to_string());
     args.push("pipe:2".to_string());
 
-    // Use a temporary file for output to allow safe overwriting
     let temp_output_path = format!("{}.tmp.{}", output_path, config.target_format);
     
     args.push(temp_output_path.clone());
 
-    // Initial event
     let _ = app.emit("video-progress", ProgressPayload {
         path: input_path.clone(),
         progress: 0,
@@ -461,6 +508,10 @@ pub fn process_video(
     let mut current_speed = 0.0;
     let mut current_bitrate = 0.0;
     let mut current_sec = 0.0;
+    
+    // Auto-skip logic state
+    let mut high_bitrate_count: i32 = 0;
+    let auto_skip_enabled = config.compression_mode == "crf" && config.crf_auto_skip;
 
     println!("Starting ffmpeg for {}, duration: {}s", input_path, duration_sec);
 
@@ -475,7 +526,7 @@ pub fn process_video(
             current_sec = parse_time_str(time_val);
         } else if let Some(idx) = line.find("out_time_ms=") {
              let ms_val: f64 = line[idx+12..].trim().parse().unwrap_or(0.0);
-             current_sec = ms_val / 1_000_000.0; // Wait, out_time_ms is usually microseconds in some versions? No, out_time_us is.
+             current_sec = ms_val / 1_000_000.0;
         } else if let Some(idx) = line.find("out_time_us=") {
              let us_val: f64 = line[idx+12..].trim().parse().unwrap_or(0.0);
              current_sec = us_val / 1_000_000.0;
@@ -496,6 +547,78 @@ pub fn process_video(
         }
 
         if line.contains("progress=") {
+            // Auto-Skip Check
+            if auto_skip_enabled && duration_sec > 0.0 {
+                 if let Some(in_br) = input_bitrate_kbps {
+                     // Check strictly within the "early" phase, e.g. first 20% or 30 seconds
+                     if current_sec > 3.0 && (current_sec < 30.0 || (current_sec / duration_sec) < 0.2) {
+                         let threshold_multiplier = config.crf_auto_skip_threshold as f64 / 100.0;
+                         if current_bitrate > (in_br * threshold_multiplier) {
+                             high_bitrate_count += 1;
+                         } else {
+                             // Reset count if it drops, to be conservative?
+                             // Or just keep accumulating? Let's sustain.
+                             // Implementing strict sustained trigger:
+                             high_bitrate_count = high_bitrate_count.saturating_sub(1);
+                         }
+
+                         if high_bitrate_count > 10 {
+                             // TRIGGER SKIP
+                             println!("Auto-skipping {} because output bitrate {:.1} > input {:.1}", input_path, current_bitrate, in_br);
+                             let _ = child.kill();
+                             let _ = child.wait(); // Wait for process to fully exit to release file locks!
+                             
+                             // Clean temp
+                             if std::path::Path::new(&temp_output_path).exists() {
+                                 // Add a small retry loop just in case OS is slow to release lock
+                                 for _ in 0..3 {
+                                     if std::fs::remove_file(&temp_output_path).is_ok() {
+                                         break;
+                                     }
+                                     std::thread::sleep(std::time::Duration::from_millis(100));
+                                 }
+                             }
+
+                             // Handle file copy
+                             if input_path != output_path {
+                                if let Some(parent) = std::path::Path::new(&output_path).parent() {
+                                    if !parent.exists() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                }
+                                if let Err(e) = std::fs::copy(&input_path, &output_path) {
+                                     // Error during copy
+                                      let _ = app.emit("video-progress", ProgressPayload {
+                                        path: input_path.clone(),
+                                        progress: 0,
+                                        status: "Error".to_string(),
+                                        speed: 0.0,
+                                        bitrate_kbps: 0.0,
+                                        output_info: None,
+                                    });
+                                     return Err(format!("Skipped (CRF check), but failed to copy file: {}", e));
+                                }
+                             }
+
+                              let _ = app.emit("video-progress", ProgressPayload {
+                                path: input_path.clone(),
+                                progress: 100,
+                                status: "Skipped".to_string(),
+                                speed: 0.0,
+                                bitrate_kbps: in_br, // Report original bitrate
+                                output_info: input_info, // Report original info
+                            });
+
+                             if let Ok(mut map) = pids.lock() {
+                                map.remove(&input_path);
+                            }
+
+                             return Ok(());
+                         }
+                     }
+                 }
+            }
+
             let percent = if duration_sec > 0.0 {
                 ((current_sec / duration_sec) * 100.0) as u8
             } else {
@@ -522,7 +645,6 @@ pub fn process_video(
     }
     
     if status.success() {
-        // ... (existing success logic)
         // 1. Verify the output video
         let verify_result = verify_video(ffmpeg_path, &temp_output_path);
         
@@ -552,38 +674,17 @@ pub fn process_video(
         }
 
         // 3. Safe overwrite logic
-        // If output file exists, remove it
         if std::path::Path::new(&output_path).exists() {
              if let Err(e) = std::fs::remove_file(&output_path) {
                  return Err(format!("Failed to remove existing output file: {}", e));
              }
         }
-        // Rename temp file to output file
         if let Err(e) = std::fs::rename(&temp_output_path, &output_path) {
              return Err(format!("Failed to move temp file to output: {}", e));
         }
 
         // 4. Fetch metadata for the new output file
-        // Helper to get raw ffprobe name might be needed, or we passed ffmpeg_path.
-        // We assume ffprobe is in the same dir as ffmpeg.
-        let output_info = if let Some(parent_dir) = std::path::Path::new(ffmpeg_path).parent() {
-             let ffmpeg_path_buf = std::path::Path::new(ffmpeg_path);
-             let ffprobe_name = if let Some(ext) = ffmpeg_path_buf.extension() {
-                 if ext.to_string_lossy().eq_ignore_ascii_case("exe") {
-                     "ffprobe.exe"
-                 } else {
-                     "ffprobe"
-                 }
-             } else {
-                 if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }
-             };
-
-             let binding = parent_dir.join(ffprobe_name);
-             let ffprobe_path_new = binding.to_str().unwrap_or("ffprobe");
-             get_video_info(std::path::Path::new(&output_path), ffprobe_path_new).ok()
-        } else {
-             None
-        };
+        let output_info = get_video_info(std::path::Path::new(&output_path), &ffprobe_path).ok();
 
          let _ = app.emit("video-progress", ProgressPayload {
             path: input_path.clone(),
