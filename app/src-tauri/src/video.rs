@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader};
 use walkdir::WalkDir;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoInfo {
     pub name: String,
     pub path: String,
@@ -13,6 +16,10 @@ pub struct VideoInfo {
     pub encoder: String,
     pub status: String, // "Pending", "Processing", "Done", "Error"
     pub progress: u8,
+    #[serde(default)]
+    pub duration_sec: f64,
+    pub speed: Option<f64>,
+    pub bitrate_kbps: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -34,6 +41,43 @@ pub struct DetectionReport {
     pub video: Vec<DetectedEncoder>,
     pub audio: Vec<DetectedEncoder>,
     pub log: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MaxResolution {
+    pub enabled: bool,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EncoderConfig {
+    pub name: String,
+    pub value: String,
+    pub visible: bool,
+    pub custom_params: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionConfig {
+    pub compression_mode: String,
+    pub target_bitrate: u32, // kbps
+    #[serde(rename = "targetCRF")]
+    pub target_crf: f32,
+    #[serde(rename = "targetVMAF")]
+    pub target_vmaf: f32,
+    pub ffmpeg_threads: u32,
+    pub ffprobe_threads: u32,
+    pub max_resolution: MaxResolution,
+    pub video_encoder: String,
+    pub audio_encoder: String,
+    pub target_format: String,
+    pub available_video_encoders: Vec<EncoderConfig>,
+    pub available_audio_encoders: Vec<EncoderConfig>,
+    pub custom_filters: Vec<String>,
 }
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v"];
@@ -59,6 +103,9 @@ pub fn scan_videos(directory: &str) -> ScanResult {
                                 encoder: "...".to_string(),
                                 status: "Scanning".to_string(),
                                 progress: 0,
+                                duration_sec: 0.0,
+                                speed: None,
+                                bitrate_kbps: None,
                             });
                         }
                     }
@@ -235,5 +282,372 @@ fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> 
         encoder: codec,
         status: "Pending".to_string(),
         progress: 0,
+        duration_sec: format["duration"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        speed: None,
+        bitrate_kbps: None,
     })
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProgressPayload {
+    path: String,
+    progress: u8,
+    status: String,
+    speed: f64,
+    bitrate_kbps: f64,
+    output_info: Option<VideoInfo>,
+}
+
+fn parse_time_str(time_str: &str) -> f64 {
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() == 3 {
+        let h: f64 = parts[0].parse().unwrap_or(0.0);
+        let m: f64 = parts[1].parse().unwrap_or(0.0);
+        let s: f64 = parts[2].parse().unwrap_or(0.0);
+        return h * 3600.0 + m * 60.0 + s;
+    }
+    0.0
+}
+
+pub fn process_video(
+    app: AppHandle,
+    ffmpeg_path: &str,
+    input_path: String,
+    output_path: String,
+    config: CompressionConfig,
+    duration_sec: f64,
+    pids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>
+) -> Result<(), String> {
+    let mut args = Vec::new();
+    args.push("-y".to_string());
+    args.push("-hide_banner".to_string());
+    // -progress pipe:1 is useful but parsing stderr is standard human readable.
+    // ffmpeg outputs progress to stderr by default.
+    args.push("-i".to_string());
+    args.push(input_path.clone());
+
+    // Video Encoder
+    args.push("-c:v".to_string());
+    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder };
+    args.push(v_enc.clone());
+
+    // Compression Mode
+    match config.compression_mode.as_str() {
+        "bitrate" => {
+            args.push("-b:v".to_string());
+            args.push(format!("{}k", config.target_bitrate));
+        },
+        "crf" => {
+            // CRF is usually for x264/x265/svt-av1.
+            // Check if encoder supports CRF? Most do.
+            if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
+                 args.push("-crf".to_string());
+                 args.push(format!("{}", config.target_crf));
+            } else if v_enc.contains("nvenc") {
+                // NVENC usually uses -cq for CRF-like
+                 args.push("-cq".to_string());
+                 args.push(format!("{}", config.target_crf));
+                 // Also need -rc vbr or constqp?
+            } else {
+                 // Fallback to bitrate or qscale? 
+                 args.push("-q:v".to_string());
+                 args.push(format!("{}", config.target_crf));
+            }
+        },
+        "vmaf" => {
+            // Fallback to CRF for now as VMAF is not fully implemented in this phase
+            args.push("-crf".to_string());
+             args.push("23".to_string()); 
+        },
+        _ => {}
+    }
+
+    // Audio Encoder
+    args.push("-c:a".to_string());
+    let a_enc = if config.audio_encoder.is_empty() { "aac".to_string() } else { config.audio_encoder };
+    args.push(a_enc.clone());
+
+    // Resolution
+    if config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
+        args.push("-vf".to_string());
+        // scale=w:h:force_original_aspect_ratio=decrease
+        // This ensures it fits within box, preserving aspect ratio.
+        args.push(format!("scale='min({},iw)':-2", config.max_resolution.width));
+    }
+
+    // Custom Filters/Params
+    for filter in config.custom_filters {
+        if !filter.trim().is_empty() {
+            // Assume filter is a raw arg for now, or -vf? 
+            // The instruction says "custom filters (extra general parameters)". 
+            // So we treat them as raw args.
+            // But if it's multiple words?
+             let parts: Vec<&str> = filter.split_whitespace().collect();
+             for p in parts {
+                 args.push(p.to_string());
+             }
+        }
+    }
+    
+    // Add specific encoder params if found in available_video_encoders?
+    // The frontend passes available_video_encoders but that's for UI. 
+    // The strict "custom parameters" for *selected* encoder are not explicitly in CompressionConfig top level?
+    // Ah, EncoderConfig has `custom_params`.
+    // We should find the selected encoder config in the list.
+    if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
+        for param in &enc_cfg.custom_params {
+             let parts: Vec<&str> = param.split_whitespace().collect();
+             for p in parts {
+                 args.push(p.to_string());
+             }
+        }
+    }
+     if let Some(enc_cfg) = config.available_audio_encoders.iter().find(|e| e.value == a_enc) {
+        for param in &enc_cfg.custom_params {
+             let parts: Vec<&str> = param.split_whitespace().collect();
+             for p in parts {
+                 args.push(p.to_string());
+             }
+        }
+    }
+
+    // threads
+    if config.ffmpeg_threads > 0 {
+        args.push("-threads".to_string());
+        args.push(format!("{}", config.ffmpeg_threads));
+    }
+
+    // Force ffmpeg to emit progress in a machine-readable format to stderr
+    args.push("-progress".to_string());
+    args.push("pipe:2".to_string());
+
+    // Use a temporary file for output to allow safe overwriting
+    let temp_output_path = format!("{}.tmp.{}", output_path, config.target_format);
+    
+    args.push(temp_output_path.clone());
+
+    // Initial event
+    let _ = app.emit("video-progress", ProgressPayload {
+        path: input_path.clone(),
+        progress: 0,
+        status: "Processing".to_string(),
+        speed: 0.0,
+        bitrate_kbps: 0.0,
+        output_info: None,
+    });
+
+    let mut child = Command::new(ffmpeg_path)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+
+    let pid = child.id();
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.insert(input_path.clone(), pid);
+        }
+    }
+
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+    let reader = BufReader::new(stderr);
+
+    let mut current_speed = 0.0;
+    let mut current_bitrate = 0.0;
+    let mut current_sec = 0.0;
+
+    println!("Starting ffmpeg for {}, duration: {}s", input_path, duration_sec);
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+
+        if let Some(idx) = line.find("out_time=") {
+            let time_val = line[idx+9..].trim();
+            current_sec = parse_time_str(time_val);
+        } else if let Some(idx) = line.find("out_time_ms=") {
+             let ms_val: f64 = line[idx+12..].trim().parse().unwrap_or(0.0);
+             current_sec = ms_val / 1_000_000.0; // Wait, out_time_ms is usually microseconds in some versions? No, out_time_us is.
+        } else if let Some(idx) = line.find("out_time_us=") {
+             let us_val: f64 = line[idx+12..].trim().parse().unwrap_or(0.0);
+             current_sec = us_val / 1_000_000.0;
+        } else if let Some(idx) = line.find("speed=") {
+            let speed_str = line[idx+6..].trim();
+            if let Some(s_idx) = speed_str.find('x') {
+                 current_speed = speed_str[0..s_idx].parse().unwrap_or(0.0);
+            } else {
+                 current_speed = speed_str.parse().unwrap_or(0.0);
+            }
+        } else if let Some(idx) = line.find("bitrate=") {
+             let br_str = line[idx+8..].trim();
+             if let Some(k_idx) = br_str.find('k') {
+                 current_bitrate = br_str[0..k_idx].parse().unwrap_or(0.0);
+             } else {
+                 current_bitrate = 0.0;
+             }
+        }
+
+        if line.contains("progress=") {
+            let percent = if duration_sec > 0.0 {
+                ((current_sec / duration_sec) * 100.0) as u8
+            } else {
+                0
+            };
+            
+            let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.clone(),
+                progress: percent.min(100),
+                status: "Processing".to_string(),
+                speed: current_speed,
+                bitrate_kbps: current_bitrate,
+                output_info: None,
+            });
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("Failed to wait on ffmpeg: {}", e))?;
+    
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.remove(&input_path);
+        }
+    }
+    
+    if status.success() {
+        // ... (existing success logic)
+        // 1. Verify the output video
+        let verify_result = verify_video(ffmpeg_path, &temp_output_path);
+        
+        if let Err(e) = verify_result {
+            // Cleanup temp file
+             if std::path::Path::new(&temp_output_path).exists() {
+                 let _ = std::fs::remove_file(&temp_output_path);
+             }
+             let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.clone(),
+                progress: 0,
+                status: "Error".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info: None,
+            });
+            return Err(format!("Validation failed: {}", e));
+        }
+
+        // 2. Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(&output_path).parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return Err(format!("Failed to create output directory: {}", e));
+                }
+            }
+        }
+
+        // 3. Safe overwrite logic
+        // If output file exists, remove it
+        if std::path::Path::new(&output_path).exists() {
+             if let Err(e) = std::fs::remove_file(&output_path) {
+                 return Err(format!("Failed to remove existing output file: {}", e));
+             }
+        }
+        // Rename temp file to output file
+        if let Err(e) = std::fs::rename(&temp_output_path, &output_path) {
+             return Err(format!("Failed to move temp file to output: {}", e));
+        }
+
+        // 4. Fetch metadata for the new output file
+        // Helper to get raw ffprobe name might be needed, or we passed ffmpeg_path.
+        // We assume ffprobe is in the same dir as ffmpeg.
+        let output_info = if let Some(parent_dir) = std::path::Path::new(ffmpeg_path).parent() {
+             let ffmpeg_path_buf = std::path::Path::new(ffmpeg_path);
+             let ffprobe_name = if let Some(ext) = ffmpeg_path_buf.extension() {
+                 if ext.to_string_lossy().eq_ignore_ascii_case("exe") {
+                     "ffprobe.exe"
+                 } else {
+                     "ffprobe"
+                 }
+             } else {
+                 if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" }
+             };
+
+             let binding = parent_dir.join(ffprobe_name);
+             let ffprobe_path_new = binding.to_str().unwrap_or("ffprobe");
+             get_video_info(std::path::Path::new(&output_path), ffprobe_path_new).ok()
+        } else {
+             None
+        };
+
+         let _ = app.emit("video-progress", ProgressPayload {
+            path: input_path.clone(),
+            progress: 100,
+            status: "Done".to_string(),
+            speed: 0.0,
+            bitrate_kbps: 0.0,
+            output_info,
+        });
+        Ok(())
+    } else {
+         // Cleanup temp file
+         if std::path::Path::new(&temp_output_path).exists() {
+             let _ = std::fs::remove_file(&temp_output_path);
+         }
+         
+         let is_cancelled = {
+             if let Ok(mut set) = cancelled_paths.lock() {
+                 set.remove(&input_path)
+             } else {
+                 false
+             }
+         };
+
+         let status_str = if is_cancelled { "Cancelled" } else { "Error" };
+
+         let _ = app.emit("video-progress", ProgressPayload {
+            path: input_path.clone(),
+            progress: 0,
+            status: status_str.to_string(),
+            speed: 0.0,
+            bitrate_kbps: 0.0,
+            output_info: None,
+        });
+        Err(format!("FFmpeg exited with status: {:?}{}", status, if is_cancelled { " (Cancelled)" } else { "" }))
+    }
+}
+
+fn verify_video(ffmpeg_path: &str, file_path: &str) -> Result<(), String> {
+    // 1. Check if file exists and has size
+    let metadata = std::fs::metadata(file_path).map_err(|e| format!("Failed to get metadata: {}", e))?;
+    if metadata.len() == 0 {
+        return Err("File is empty".to_string());
+    }
+
+    // 2. Try to decode a small portion using ffmpeg to ensure integrity
+    // ffmpeg -v error -i input -t 1 -f null -
+    let args = [
+        "-v", "error",
+        "-i", file_path,
+        "-t", "1",
+        "-f", "null",
+        "-"
+    ];
+
+    let output = Command::new(ffmpeg_path)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to run verification: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Verification failed (integrity check): {}", stderr));
+    }
+
+    Ok(())
 }

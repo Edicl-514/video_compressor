@@ -7,19 +7,77 @@
 
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { ask } from "@tauri-apps/plugin-dialog";
+  import { onMount, onDestroy } from "svelte";
+  import type { VideoInfo } from "$lib/types";
   import { settingsStore } from "$lib/stores/settings.svelte";
 
-  let inputPath = "";
-  let outputPath = "";
-  let files: any[] = [];
-  let isScanning = false;
-  let scanCounter = 0;
-  let showSettings = false;
+  let inputPath = $state("");
+  let outputPath = $state("");
+  let files = $state<VideoInfo[]>([]);
+  let isScanning = $state(false);
+  let isProcessing = $state(false);
+  let shouldStop = $state(false);
+  let scanCounter = $state(0);
+  let showSettings = $state(false);
+
+  let processingStats = $derived.by(() => {
+    // Active processing stats
+    const processing = files.filter(
+      (f) =>
+        f.status === "Processing" &&
+        (f.speed !== undefined || f.bitrateKbps !== undefined),
+    );
+
+    let totalSpeed = 0;
+    let totalBitrate = 0;
+
+    if (processing.length > 0) {
+      for (const f of processing) {
+        totalSpeed += f.speed || 0;
+        totalBitrate += f.bitrateKbps || 0;
+      }
+    }
+
+    // Total Progress Calculation
+    const totalCount = files.length;
+    let progressSum = 0;
+
+    if (totalCount > 0) {
+      for (const f of files) {
+        if (f.status === "Done") {
+          progressSum += 1;
+        } else if (f.status === "Processing") {
+          progressSum += (f.progress || 0) / 100;
+        }
+        // Error, Pending, Cancelled count as 0 progress for now?
+        // Or should Error count as done? Usually Error stops the flow for that file, so technically it's "processed" (failed).
+        // But let's stick to the user's formula: "Finished + Processing".
+        // If "Error" means "Finished with error", maybe we should count it?
+        // Let's assume strict "Done" for now.
+      }
+    }
+
+    const totalProgress = totalCount > 0 ? (progressSum / totalCount) * 100 : 0;
+
+    // Only return null if there are absolutely no files to work on?
+    // Or just return the object with 0s.
+    // If files.length is 0, we can return null to hide everything?
+    if (totalCount === 0) return null;
+
+    return {
+      speed: totalSpeed,
+      bitrate: processing.length > 0 ? totalBitrate / processing.length : 0,
+      totalProgress,
+    };
+  });
 
   // Drag state
-  let isDragging = false;
-  let activeZone: "input" | "output" | "both" | null = null;
+  let isDragging = $state(false);
+  let activeZone = $state<"input" | "output" | "both" | null>(null);
+
+  let unlistenProgress: (() => void) | null = null;
 
   async function scanVideos() {
     if (!inputPath) return;
@@ -67,12 +125,10 @@
 
           if (scanId !== scanCounter) return;
           files[i] = info;
-          files = [...files];
         } catch (e) {
           console.error(`Failed to get metadata for ${file.path}:`, e);
           if (scanId === scanCounter) {
-            files[i] = { ...file, status: "Error" };
-            files = [...files];
+            files[i].status = "Error";
           }
         }
       }
@@ -116,111 +172,126 @@
       } else {
         activeZone = null;
       }
-      console.log("Active zone updated to:", activeZone);
+      // console.log("Active zone updated to:", activeZone);
     } else {
       activeZone = null;
     }
   }
 
   onMount(() => {
-    console.log("Setting up Tauri file drop listeners...");
-
     let unlisten: (() => void) | undefined;
-    const listenPromise = getCurrentWindow().onDragDropEvent((event) => {
-      console.log("Drag drop event:", event);
-      console.log("Full payload:", JSON.stringify(event.payload, null, 2));
+    let unlistenMouseMove: (() => void) | undefined;
 
-      if (event.payload.type === "enter" || event.payload.type === "over") {
-        console.log("File drop hover detected!");
-        isDragging = true;
-
-        // Check if payload contains position information
-        const payload = event.payload as any;
-        if (payload.position) {
-          console.log("Position found:", payload.position);
-          // Tauri provides PhysicalPosition, need to convert to logical pixels
-          const logicalX = payload.position.x / window.devicePixelRatio;
-          const logicalY = payload.position.y / window.devicePixelRatio;
-          console.log(
-            "Converted to logical:",
-            logicalX,
-            logicalY,
-            "devicePixelRatio:",
-            window.devicePixelRatio,
-          );
-          updateActiveZoneFromPoint(logicalX, logicalY);
-        } else if (payload.x !== undefined && payload.y !== undefined) {
-          console.log("Coordinates found:", payload.x, payload.y);
-          const logicalX = payload.x / window.devicePixelRatio;
-          const logicalY = payload.y / window.devicePixelRatio;
-          updateActiveZoneFromPoint(logicalX, logicalY);
-        } else {
-          console.log("No position data in payload");
-        }
-      } else if (event.payload.type === "drop") {
-        console.log("File drop detected!", event.payload.paths);
-        const paths = event.payload.paths;
-        console.log("Active zone at drop:", activeZone);
-
-        if (paths && paths.length > 0) {
-          const path = paths[0];
-
-          if (activeZone === "input") {
-            inputPath = path;
-            scanVideos();
-          } else if (activeZone === "output") {
-            outputPath = path;
-          } else if (activeZone === "both") {
-            inputPath = path;
-            outputPath = path;
-            scanVideos();
+    const setup = async () => {
+      // Listen for progress
+      unlistenProgress = await listen("video-progress", (event: any) => {
+        const {
+          path,
+          progress,
+          status,
+          outputInfo,
+          bitrateKbps,
+          speed,
+          bitrate_kbps,
+          output_info,
+        } = event.payload;
+        const index = files.findIndex((f) => f.path === path);
+        if (index !== -1) {
+          // Don't overwrite 'Cancelled' status with stale backend updates
+          if (files[index].status === "Cancelled" && status === "Processing") {
+            console.log(
+              `Ignoring stale 'Processing' update for cancelled file: ${path}`,
+            );
+            return;
           }
+
+          // Map both camelCase and snake_case to be safe, but use sprawled object for reactivity
+          files[index] = {
+            ...files[index],
+            progress,
+            status,
+            speed: speed ?? files[index].speed,
+            bitrateKbps:
+              bitrateKbps ?? bitrate_kbps ?? files[index].bitrateKbps,
+            outputInfo: outputInfo ?? output_info ?? files[index].outputInfo,
+          };
+          console.log(`Update ${path}: ${progress}% ${status}`);
         }
+      });
 
-        // Reset
-        isDragging = false;
-        activeZone = null;
-      } else if (event.payload.type === "leave") {
-        console.log("File drop cancelled");
-        isDragging = false;
-        activeZone = null;
-      }
-    });
+      console.log("Setting up Tauri file drop listeners...");
 
-    listenPromise.then((u) => {
+      const u = await getCurrentWindow().onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          isDragging = true;
+
+          const payload = event.payload as any;
+          if (payload.position) {
+            const logicalX = payload.position.x / window.devicePixelRatio;
+            const logicalY = payload.position.y / window.devicePixelRatio;
+            updateActiveZoneFromPoint(logicalX, logicalY);
+          } else if (payload.x !== undefined && payload.y !== undefined) {
+            const logicalX = payload.x / window.devicePixelRatio;
+            const logicalY = payload.y / window.devicePixelRatio;
+            updateActiveZoneFromPoint(logicalX, logicalY);
+          }
+        } else if (event.payload.type === "drop") {
+          console.log("File drop detected!", event.payload.paths);
+          const paths = event.payload.paths;
+
+          if (paths && paths.length > 0) {
+            const path = paths[0];
+
+            if (activeZone === "input") {
+              inputPath = path;
+              scanVideos();
+            } else if (activeZone === "output") {
+              outputPath = path;
+            } else if (activeZone === "both") {
+              inputPath = path;
+              outputPath = path;
+              scanVideos();
+            }
+          }
+
+          isDragging = false;
+          activeZone = null;
+        } else if (event.payload.type === "leave") {
+          isDragging = false;
+          activeZone = null;
+        }
+      });
       unlisten = u;
-    });
 
-    // Listen to global mousemove to track mouse position during drag
-    // (dragover doesn't work with Tauri file drop on Windows)
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging) {
-        updateActiveZoneFromPoint(e.clientX, e.clientY);
-      }
+      // Listen to global mousemove to track mouse position during drag
+      const handleMouseMove = (e: MouseEvent) => {
+        if (isDragging) {
+          updateActiveZoneFromPoint(e.clientX, e.clientY);
+        }
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      unlistenMouseMove = () =>
+        window.removeEventListener("mousemove", handleMouseMove);
+
+      console.log("Drag drop listener registered");
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-
-    console.log("Drag drop listener registered");
+    setup();
 
     return () => {
-      if (unlisten) {
-        unlisten();
-      } else {
-        listenPromise.then((u) => u());
-      }
-      window.removeEventListener("mousemove", handleMouseMove);
+      if (unlisten) unlisten();
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenMouseMove) unlistenMouseMove();
     };
   });
 
   // HTML5 drag event handlers for zone detection (kept for fallback)
   function handleZoneDragEnter(zone: "input" | "output" | "both") {
-    console.log("Zone drag enter:", zone);
     activeZone = zone;
   }
 
   function handleZoneDragLeave(event: DragEvent) {
-    // Only clear if we're leaving the zone entirely (not entering a child)
     const target = event.currentTarget as HTMLElement;
     const relatedTarget = event.relatedTarget as HTMLElement;
 
@@ -229,15 +300,226 @@
     }
   }
 
-  function handleStart() {
+  function getOutputFilePath(
+    input: string,
+    outputDir: string,
+    format: string,
+    suffix: string,
+    inputRoot: string, // Add inputRoot parameter
+  ): string {
+    // Normalize paths for processing
+    const normalize = (p: string) => p.replace(/\\/g, "/");
+    const normInput = normalize(input);
+    const normInputRoot = normalize(inputRoot).replace(/\/$/, ""); // Remove trailing slash if present
+    const normOutputDir = normalize(outputDir).replace(/\/$/, "");
+
+    const separator = input.includes("\\") ? "\\" : "/";
+    const fileName = input.split(separator).pop() || "unknown";
+    const nameNoExt =
+      fileName.substring(0, fileName.lastIndexOf(".")) || fileName;
+
+    // Determine target directory
+    let targetDir = "";
+
+    // Check if we are outputting to a different directory structure
+    // If outputDir is set and different from inputRoot
+    const isDifferentDir =
+      normOutputDir &&
+      normOutputDir.toLowerCase() !== normInputRoot.toLowerCase();
+
+    if (
+      isDifferentDir &&
+      normInput.toLowerCase().startsWith(normInputRoot.toLowerCase())
+    ) {
+      // Calculate relative path from input root
+      // input: /root/subdir/file.mp4
+      // root: /root
+      // relative: /subdir/file.mp4 (we want /subdir part)
+
+      const relativePath = normInput.substring(normInputRoot.length); // starts with / usually
+      // relativePath includes filename: /subdir/file.mp4
+
+      const relativeDir = relativePath.substring(
+        0,
+        relativePath.lastIndexOf("/"),
+      );
+      // relativeDir: /subdir (or empty string if at root)
+
+      targetDir = normOutputDir + relativeDir;
+    } else {
+      // Same directory mode (or input is not under inputRoot? shouldn't happen with scan)
+      // Use the file's current directory
+      targetDir = input.substring(0, input.lastIndexOf(separator));
+
+      // If outputDir is set but same as inputRoot, technically we are in "Same Dir" mode for the root,
+      // but for subdirectories, we just keep them where they are relative to input root?
+      // Actually, if inputRoot == outputDir, we just want to save in place (subdir structure is implicitly preserved).
+      // So targetDir = input's dir is correct.
+    }
+
+    // Determine suffix
+    let finalSuffix = "";
+
+    // Logic for suffix:
+    // If saving to the SAME folder as original file, and suffix is empty -> Overwrite warning case.
+    // If saving to DIFFERENT folder, typically no suffix needed unless user wants one.
+
+    // We compare targetDir with input's dir
+    const normInDir = normalize(
+      input.substring(0, input.lastIndexOf(separator)),
+    ).toLowerCase();
+    const normTargetDir = normalize(targetDir).toLowerCase();
+
+    if (normInDir === normTargetDir) {
+      finalSuffix = suffix; // If empty, it means overwrite
+    } else {
+      finalSuffix = suffix;
+    }
+
+    let outName = `${nameNoExt}${finalSuffix}.${format}`;
+
+    // Handle separator for final string reconstruction
+    // We used forward slashes for calculation, better stick to it or convert back?
+    // Windows accepts forward slashes in API usually, but let's be consistent with OS if possible.
+    // Actually, simple concatenation with "/" is mostly fine in JS/Tauri as Rust handles it.
+
+    if (targetDir && !targetDir.endsWith("/")) {
+      targetDir += "/";
+    }
+
+    return targetDir + outName;
+  }
+
+  function normalizePath(p: string): string {
+    return p.replace(/\\/g, "/").toLowerCase().replace(/\/$/, "");
+  }
+
+  async function handleStart() {
+    if (isProcessing) return;
+
+    // Check if there are any files to process
+    const pendingFiles = files.filter(
+      (f) => f.status !== "Done" && f.status !== "Error",
+    );
+    if (pendingFiles.length === 0) return;
+
+    const settings = settingsStore.value;
+
+    // Overwrite Check
+    let effectiveOut = outputPath;
+    if (!effectiveOut && inputPath) {
+      effectiveOut = inputPath;
+    }
+
+    const sameDir = normalizePath(effectiveOut) === normalizePath(inputPath);
+    const emptySuffix = !settings.suffix;
+
+    if (sameDir && emptySuffix) {
+      const confirmed = await ask(
+        "The source files will be overwritten. Continue?",
+        {
+          title: "Overwrite Warning",
+          kind: "warning",
+        },
+      );
+
+      if (!confirmed) return;
+    }
+
     console.log("Start clicked");
+    isProcessing = true;
+    shouldStop = false;
+
+    // Queue of indices to process
+    const queue = files
+      .map((f, i) => ({ f, i }))
+      .filter((item) => item.f.status !== "Done" && item.f.status !== "Error")
+      .map((item) => item.i);
+
+    const concurrency = settings.ffmpegThreads || 1;
+
+    async function worker() {
+      while (queue.length > 0) {
+        if (shouldStop) break;
+
+        const i = queue.shift();
+        if (i === undefined) break;
+
+        const file = files[i];
+
+        // Prepare output path
+        const outPath = getOutputFilePath(
+          file.path,
+          outputPath,
+          settings.targetFormat,
+          settings.suffix,
+          inputPath,
+        );
+
+        // Update status to Processing
+        files[i].status = "Processing";
+        files[i].progress = 0;
+        files = [...files];
+
+        try {
+          // Check stop flag again before starting expensive operation
+          if (shouldStop) {
+            files[i].status = "Pending"; // Revert status if stopped right before start
+            files = [...files];
+            break;
+          }
+
+          await invoke("start_processing", {
+            inputPath: file.path,
+            outputPath: outPath,
+            config: settingsStore.value,
+            durationSec: file.durationSec || 0.0,
+          });
+        } catch (e: any) {
+          console.error("Processing error:", e);
+          // Only update to Error if it wasn't already marked as Cancelled
+          if (files[i] && files[i].status !== "Cancelled") {
+            files[i].status = "Error";
+            files = [...files];
+          }
+        }
+      }
+    }
+
+    const workers = Array(Math.min(concurrency, queue.length))
+      .fill(null)
+      .map(() => worker());
+
+    await Promise.all(workers);
+
+    isProcessing = false;
   }
+
   function handlePause() {
-    console.log("Pause clicked");
+    console.log("Pause clicked (Suspend/Pause not fully implemented yet)");
   }
-  function handleCancel() {
+
+  async function handleCancel() {
     console.log("Cancel clicked");
+    shouldStop = true;
+
+    // Find currently processing files and send cancel command
+    // Use a loop over index to update state correctly
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].status === "Processing") {
+        const path = files[i].path;
+        // Immediate UI feedback
+        files[i] = { ...files[i], status: "Cancelled", progress: 0 };
+
+        try {
+          await invoke("cancel_processing", { path });
+        } catch (e) {
+          console.error(`Failed to cancel ${path}:`, e);
+        }
+      }
+    }
   }
+
   function handleSettings() {
     console.log("Settings clicked");
     showSettings = true;
@@ -266,7 +548,11 @@
   </section>
 
   <section class="bottom-panel">
-    <SystemInfo />
+    <SystemInfo
+      processingSpeed={processingStats?.speed}
+      processingBitrate={processingStats?.bitrate}
+      totalProgress={processingStats?.totalProgress}
+    />
     <Controls
       on:start={handleStart}
       on:pause={handlePause}
@@ -281,8 +567,8 @@
         class="drop-zone zone-input {activeZone === 'input' ? 'active' : ''}"
         role="button"
         tabindex="0"
-        on:dragenter={() => handleZoneDragEnter("input")}
-        on:dragleave={handleZoneDragLeave}
+        ondragenter={() => handleZoneDragEnter("input")}
+        ondragleave={handleZoneDragLeave}
       >
         <div class="zone-content">
           <span class="icon">📂</span>
@@ -294,8 +580,8 @@
         class="drop-zone zone-both {activeZone === 'both' ? 'active' : ''}"
         role="button"
         tabindex="0"
-        on:dragenter={() => handleZoneDragEnter("both")}
-        on:dragleave={handleZoneDragLeave}
+        ondragenter={() => handleZoneDragEnter("both")}
+        ondragleave={handleZoneDragLeave}
       >
         <div class="zone-content">
           <span class="icon">✨</span>
@@ -307,8 +593,8 @@
         class="drop-zone zone-output {activeZone === 'output' ? 'active' : ''}"
         role="button"
         tabindex="0"
-        on:dragenter={() => handleZoneDragEnter("output")}
-        on:dragleave={handleZoneDragLeave}
+        ondragenter={() => handleZoneDragEnter("output")}
+        ondragleave={handleZoneDragLeave}
       >
         <div class="zone-content">
           <span class="icon">💾</span>

@@ -364,6 +364,22 @@
                         <option value="webm">WebM</option>
                     </select>
                 </div>
+
+                <div class="form-group">
+                    <label for="output-suffix">Output Filename Suffix</label>
+                    <input
+                        type="text"
+                        id="output-suffix"
+                        bind:value={config.suffix}
+                        placeholder="_compressed (leave empty to overwrite)"
+                    />
+                    <small
+                        style="color: #666; font-size: 0.8rem; margin-top: 4px;"
+                    >
+                        If empty and input/output folders are the same, original
+                        files will be overwritten.
+                    </small>
+                </div>
             {:else}
                 <!-- ADVANCED VIEW -->
                 <div class="section">
@@ -588,6 +604,7 @@
     }
 
     input[type="number"],
+    input[type="text"],
     select {
         background: #2a2a2a;
         border: 1px solid #444;

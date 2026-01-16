@@ -1,16 +1,6 @@
 <script lang="ts">
-    export let files: any[] = []; // Using any[] temporarily, or define interface
-
-    interface VideoInfo {
-        name: string;
-        path: string;
-        size: number;
-        resolution: string;
-        bitrate: string;
-        encoder: string;
-        status: string;
-        progress: number;
-    }
+    import type { VideoInfo } from "$lib/types";
+    export let files: VideoInfo[] = [];
 
     function formatSize(bytes: number): string {
         if (bytes === 0) return "0 B";
@@ -18,6 +8,16 @@
         const sizes = ["B", "KB", "MB", "GB", "TB"];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    }
+
+    function getCompressionRatio(oldSize: number, newSize: number): string {
+        if (oldSize === 0) return "0%";
+        const ratio = ((oldSize - newSize) / oldSize) * 100;
+        if (ratio >= 0) {
+            return "↓" + ratio.toFixed(1) + "%";
+        } else {
+            return "↑" + Math.abs(ratio).toFixed(1) + "%";
+        }
     }
 </script>
 
@@ -43,10 +43,86 @@
                 {#each files as file}
                     <tr>
                         <td class="col-name" title={file.path}>{file.name}</td>
-                        <td>{formatSize(file.size)}</td>
-                        <td>{file.resolution}</td>
-                        <td>{file.bitrate}</td>
-                        <td>{file.encoder}</td>
+
+                        <!-- Size -->
+                        <td>
+                            {#if file.status === "Done" && file.outputInfo}
+                                <div
+                                    class="info-cell"
+                                    title="Original: {formatSize(
+                                        file.size,
+                                    )} → New: {formatSize(
+                                        file.outputInfo.size,
+                                    )}"
+                                >
+                                    <span class="new-value"
+                                        >{formatSize(
+                                            file.outputInfo.size,
+                                        )}</span
+                                    >
+                                    <span class="ratio-tag"
+                                        >{getCompressionRatio(
+                                            file.size,
+                                            file.outputInfo.size,
+                                        )}</span
+                                    >
+                                </div>
+                            {:else}
+                                {formatSize(file.size)}
+                            {/if}
+                        </td>
+
+                        <!-- Resolution -->
+                        <td>
+                            {#if file.status === "Done" && file.outputInfo}
+                                <div
+                                    class="info-cell"
+                                    title="Original: {file.resolution} → New: {file
+                                        .outputInfo.resolution}"
+                                >
+                                    <span class="new-value"
+                                        >{file.outputInfo.resolution}</span
+                                    >
+                                </div>
+                            {:else}
+                                {file.resolution}
+                            {/if}
+                        </td>
+
+                        <!-- Bitrate -->
+                        <td>
+                            {#if file.status === "Done" && file.outputInfo}
+                                <div
+                                    class="info-cell"
+                                    title="Original: {file.bitrate} → New: {file
+                                        .outputInfo.bitrate}"
+                                >
+                                    <span class="new-value"
+                                        >{file.outputInfo.bitrate}</span
+                                    >
+                                </div>
+                            {:else}
+                                {file.bitrate}
+                            {/if}
+                        </td>
+
+                        <!-- Encoder -->
+                        <td>
+                            {#if file.status === "Done" && file.outputInfo}
+                                <div
+                                    class="info-cell"
+                                    title="Original: {file.encoder} → New: {file
+                                        .outputInfo.encoder}"
+                                >
+                                    <span class="new-value"
+                                        >{file.outputInfo.encoder}</span
+                                    >
+                                </div>
+                            {:else}
+                                {file.encoder}
+                            {/if}
+                        </td>
+
                         <td>
                             <span
                                 class="status-badge status-{file.status.toLowerCase()}"
@@ -173,5 +249,28 @@
     .status-done {
         background-color: #14532d;
         color: #86efac;
+    }
+    .status-cancelled {
+        background-color: #451a03;
+        color: #fbbf24;
+    }
+
+    /* New styles for updated info */
+    .info-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: help;
+    }
+    .new-value {
+        color: #86efac; /* Green-ish */
+        font-weight: 500;
+    }
+    .ratio-tag {
+        font-size: 0.75rem;
+        background-color: rgba(134, 239, 172, 0.1);
+        color: #86efac;
+        padding: 2px 4px;
+        border-radius: 4px;
     }
 </style>

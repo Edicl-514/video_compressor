@@ -5,6 +5,21 @@ export enum CompressionMode {
     VMAF = 'vmaf'
 }
 
+export interface VideoInfo {
+    name: string;
+    path: string;
+    size: number;
+    resolution: string;
+    bitrate: string;
+    encoder: string;
+    status: string; // "Scanning", "Pending", "Processing", "Done", "Error", "Cancelled"
+    progress: number;
+    durationSec: number;
+    speed?: number;
+    bitrateKbps?: number;
+    outputInfo?: VideoInfo;
+}
+
 export interface EncoderConfig {
     name: string;
     value: string;
@@ -41,6 +56,9 @@ export interface AppSettings {
 
     // Safety lock for manual filter editing
     enableCustomFiltersEditing: boolean;
+
+    // Output suffix
+    suffix: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -72,4 +90,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
     ],
     customFilters: [],
     enableCustomFiltersEditing: false,
+    suffix: '_compressed'
 };
