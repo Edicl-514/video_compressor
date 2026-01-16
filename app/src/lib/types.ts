@@ -20,7 +20,8 @@ export interface AppSettings {
     targetCRF: number; // 0-51 usually
     targetVMAF: number; // 0-100 score target
 
-    concurrentTasks: number;
+    ffmpegThreads: number;
+    ffprobeThreads: number;
     maxResolution: {
         enabled: boolean;
         width: number;
@@ -47,7 +48,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     targetBitrate: 2000,
     targetCRF: 23,
     targetVMAF: 93,
-    concurrentTasks: 1,
+    ffmpegThreads: 2,
+    ffprobeThreads: 4,
     maxResolution: {
         enabled: false,
         width: 1920,
@@ -57,16 +59,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
     audioEncoder: 'aac',
     targetFormat: 'mp4',
     availableVideoEncoders: [
-        { name: 'H.264 (x264)', value: 'libx264', visible: true, customParams: [] },
-        { name: 'H.265 (x265)', value: 'libx265', visible: true, customParams: [] },
-        { name: 'AV1 (SVT-AV1)', value: 'libsvtav1', visible: true, customParams: [] },
-        { name: 'NVENC H.264', value: 'h264_nvenc', visible: true, customParams: [] },
-        { name: 'NVENC HEVC', value: 'hevc_nvenc', visible: true, customParams: [] },
+        { name: 'libx264 (CPU)', value: 'libx264', visible: true, customParams: [] },
+        { name: 'libx265 (CPU)', value: 'libx265', visible: true, customParams: [] },
+        { name: 'libsvtav1 (CPU)', value: 'libsvtav1', visible: true, customParams: [] },
+        { name: 'h264_nvenc (HW)', value: 'h264_nvenc', visible: true, customParams: [] },
+        { name: 'hevc_nvenc (HW)', value: 'hevc_nvenc', visible: true, customParams: [] },
     ],
     availableAudioEncoders: [
-        { name: 'AAC', value: 'aac', visible: true, customParams: [] },
-        { name: 'MP3', value: 'libmp3lame', visible: true, customParams: [] },
-        { name: 'Opus', value: 'libopus', visible: true, customParams: [] },
+        { name: 'aac (CPU)', value: 'aac', visible: true, customParams: [] },
+        { name: 'libmp3lame (CPU)', value: 'libmp3lame', visible: true, customParams: [] },
+        { name: 'libopus (CPU)', value: 'libopus', visible: true, customParams: [] },
     ],
     customFilters: [],
     enableCustomFiltersEditing: false,

@@ -8,6 +8,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
+  import { settingsStore } from "$lib/stores/settings.svelte";
 
   let inputPath = "";
   let outputPath = "";
@@ -47,22 +48,24 @@
   }
 
   async function fetchMetadata(scanId: number) {
-    // Process files and update metadata
-    for (let i = 0; i < files.length; i++) {
-      // If a new scan has started, abort this one
-      if (scanId !== scanCounter) return;
+    const threads = settingsStore.value.ffprobeThreads || 4;
+    const queue = [...files.keys()].filter(
+      (i) => files[i].status === "Scanning",
+    );
 
-      const file = files[i];
-      if (file.status === "Scanning") {
+    async function worker() {
+      while (queue.length > 0) {
+        if (scanId !== scanCounter) return;
+        const i = queue.shift();
+        if (i === undefined) break;
+
+        const file = files[i];
         try {
           const info: any = await invoke("get_video_metadata", {
             path: file.path,
           });
 
-          // Check again before updating
           if (scanId !== scanCounter) return;
-
-          // Update the specific file in the array
           files[i] = info;
           files = [...files];
         } catch (e) {
@@ -74,6 +77,13 @@
         }
       }
     }
+
+    // Start workers
+    const workers = Array(Math.min(threads, queue.length))
+      .fill(null)
+      .map(() => worker());
+
+    await Promise.all(workers);
   }
 
   function handleInputChange(event: CustomEvent<string>) {

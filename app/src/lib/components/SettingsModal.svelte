@@ -13,6 +13,14 @@
     let config = $state<AppSettings>(
         JSON.parse(JSON.stringify(settingsStore.value)),
     );
+
+    // Safety initialization for existing encoders
+    config.availableVideoEncoders.forEach((e) => {
+        if (!e.customParams) e.customParams = [];
+    });
+    config.availableAudioEncoders.forEach((e) => {
+        if (!e.customParams) e.customParams = [];
+    });
     let currentView = $state<"basic" | "advanced">("basic");
     let editingTarget = $state<{
         type: "video" | "audio" | "filters";
@@ -20,19 +28,112 @@
         title: string;
         params: string[];
     } | null>(null);
+    let isDetecting = $state<boolean>(false);
+    let notification = $state<{
+        message: string;
+        type: "success" | "error";
+    } | null>(null);
+
+    function showNotification(
+        message: string,
+        type: "success" | "error" = "success",
+    ) {
+        notification = { message, type };
+        setTimeout(() => {
+            notification = null;
+        }, 5000);
+    }
 
     function save() {
         settingsStore.value = JSON.parse(JSON.stringify(config));
         close();
     }
 
-    function detectEncoders() {
-        // Placeholder for Rust backend call
+    async function detectEncoders() {
         console.log("Detecting encoders...");
-        // invoke('detect_encoders').then(res => ...)
-        alert(
-            "Encoder detection will be implemented in the backend integration phase.",
-        );
+        isDetecting = true;
+        try {
+            const report: any = await invoke("detect_encoders");
+            console.log("Detected:", report);
+
+            // Reset visibility for all encoders first
+            config.availableVideoEncoders.forEach((e) => (e.visible = false));
+            config.availableAudioEncoders.forEach((e) => (e.visible = false));
+
+            let addedVideo = 0;
+            let addedAudio = 0;
+
+            // Update Video Encoders
+            for (const detected of report.video) {
+                const existingIndex = config.availableVideoEncoders.findIndex(
+                    (e) => e.value === detected.value,
+                );
+                if (existingIndex >= 0) {
+                    config.availableVideoEncoders[existingIndex].visible = true;
+                    // Force update name to ensure consistency (e.g. migrating from old names)
+                    config.availableVideoEncoders[existingIndex].name =
+                        detected.name;
+                } else {
+                    config.availableVideoEncoders.push({
+                        name: detected.name,
+                        value: detected.value,
+                        visible: true,
+                        customParams: [],
+                    });
+                    addedVideo++;
+                }
+            }
+
+            // Update Audio Encoders
+            for (const detected of report.audio) {
+                const existingIndex = config.availableAudioEncoders.findIndex(
+                    (e) => e.value === detected.value,
+                );
+                if (existingIndex >= 0) {
+                    config.availableAudioEncoders[existingIndex].visible = true;
+                    config.availableAudioEncoders[existingIndex].name =
+                        detected.name;
+                } else {
+                    config.availableAudioEncoders.push({
+                        name: detected.name,
+                        value: detected.value,
+                        visible: true,
+                        customParams: [],
+                    });
+                    addedAudio++;
+                }
+            }
+
+            // Ensure selected encoder is valid
+            const currentVideo = config.availableVideoEncoders.find(
+                (e) => e.value === config.videoEncoder,
+            );
+            if (!currentVideo || !currentVideo.visible) {
+                const firstVisible = config.availableVideoEncoders.find(
+                    (e) => e.visible,
+                );
+                if (firstVisible) config.videoEncoder = firstVisible.value;
+            }
+
+            const currentAudio = config.availableAudioEncoders.find(
+                (e) => e.value === config.audioEncoder,
+            );
+            if (!currentAudio || !currentAudio.visible) {
+                const firstVisible = config.availableAudioEncoders.find(
+                    (e) => e.visible,
+                );
+                if (firstVisible) config.audioEncoder = firstVisible.value;
+            }
+
+            showNotification(
+                `Detection complete. Enabled ${report.video.length} video encoders and ${report.audio.length} audio encoders.`,
+            );
+        } catch (e) {
+            console.error(e);
+            showNotification("Failed to detect encoders: " + e, "error");
+        } finally {
+            isDetecting = false;
+        }
     }
 
     function toggleResolutionLimit(e: Event) {
@@ -83,16 +184,6 @@
         } else if (editingTarget.type === "audio") {
             config.availableAudioEncoders[editingTarget.index].customParams =
                 newParams;
-        }
-    }
-
-    function toggleEncoderVisibility(index: number, type: "video" | "audio") {
-        if (type === "video") {
-            config.availableVideoEncoders[index].visible =
-                !config.availableVideoEncoders[index].visible;
-        } else {
-            config.availableAudioEncoders[index].visible =
-                !config.availableAudioEncoders[index].visible;
         }
     }
 </script>
@@ -190,15 +281,27 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label for="concurrent-tasks">Concurrent Tasks</label>
-                    <input
-                        type="number"
-                        id="concurrent-tasks"
-                        min="1"
-                        max="16"
-                        bind:value={config.concurrentTasks}
-                    />
+                <div class="form-group-row">
+                    <div class="form-group">
+                        <label for="ffmpeg-threads">FFmpeg Tasks</label>
+                        <input
+                            type="number"
+                            id="ffmpeg-threads"
+                            min="1"
+                            max="16"
+                            bind:value={config.ffmpegThreads}
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label for="ffprobe-threads">FFprobe Tasks</label>
+                        <input
+                            type="number"
+                            id="ffprobe-threads"
+                            min="1"
+                            max="64"
+                            bind:value={config.ffprobeThreads}
+                        />
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -266,9 +369,17 @@
                 <div class="section">
                     <div class="section-header">
                         <h3>Encoder Management</h3>
-                        <button class="secondary-btn" onclick={detectEncoders}
-                            >Detect Encoders</button
+                        <button
+                            class="secondary-btn"
+                            onclick={detectEncoders}
+                            disabled={isDetecting}
                         >
+                            {#if isDetecting}
+                                Scanning...
+                            {:else}
+                                Detect Encoders
+                            {/if}
+                        </button>
                     </div>
                     <div class="encoder-list">
                         <h4>Video Encoders</h4>
@@ -277,18 +388,24 @@
                                 <label class="checkbox-label">
                                     <input
                                         type="checkbox"
-                                        checked={enc.visible}
-                                        onchange={() =>
-                                            toggleEncoderVisibility(i, "video")}
+                                        bind:checked={enc.visible}
                                     />
-                                    {enc.name} ({enc.value})
+                                    {enc.name}
                                 </label>
-                                <button
-                                    class="secondary-btn small-btn"
-                                    onclick={() => openParamsEditor("video", i)}
-                                >
-                                    Edit Params
-                                </button>
+                                <div class="encoder-actions">
+                                    {#if enc.customParams?.length > 0}
+                                        <span class="badge small"
+                                            >{enc.customParams.length} active</span
+                                        >
+                                    {/if}
+                                    <button
+                                        class="secondary-btn small-btn"
+                                        onclick={() =>
+                                            openParamsEditor("video", i)}
+                                    >
+                                        Edit Params
+                                    </button>
+                                </div>
                             </div>
                         {/each}
 
@@ -298,18 +415,24 @@
                                 <label class="checkbox-label">
                                     <input
                                         type="checkbox"
-                                        checked={enc.visible}
-                                        onchange={() =>
-                                            toggleEncoderVisibility(i, "audio")}
+                                        bind:checked={enc.visible}
                                     />
-                                    {enc.name} ({enc.value})
+                                    {enc.name}
                                 </label>
-                                <button
-                                    class="secondary-btn small-btn"
-                                    onclick={() => openParamsEditor("audio", i)}
-                                >
-                                    Edit Params
-                                </button>
+                                <div class="encoder-actions">
+                                    {#if enc.customParams?.length > 0}
+                                        <span class="badge small"
+                                            >{enc.customParams.length} active</span
+                                        >
+                                    {/if}
+                                    <button
+                                        class="secondary-btn small-btn"
+                                        onclick={() =>
+                                            openParamsEditor("audio", i)}
+                                    >
+                                        Edit Params
+                                    </button>
+                                </div>
                             </div>
                         {/each}
                     </div>
@@ -371,6 +494,17 @@
             <button class="secondary-btn" onclick={close}>Cancel</button>
             <button class="primary-btn" onclick={save}>Save Changes</button>
         </footer>
+
+        {#if notification}
+            <div class={"notification " + notification.type}>
+                {#if notification.type === "success"}
+                    <span style="color: #34d399;">✓</span>
+                {:else}
+                    <span style="color: #ef4444;">⚠</span>
+                {/if}
+                {notification.message}
+            </div>
+        {/if}
     </div>
 </div>
 
@@ -625,5 +759,66 @@
         padding: 2px 8px;
         border-radius: 100px;
         font-weight: 600;
+    }
+
+    .badge.small {
+        padding: 0px 6px;
+        font-size: 0.7rem;
+        min-width: 18px;
+        text-align: center;
+    }
+
+    .encoder-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .notification {
+        position: absolute;
+        bottom: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #333;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 1100;
+        animation: slide-up 0.3s ease-out;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid #444;
+        max-width: 80%;
+        text-align: center;
+    }
+
+    .notification.success {
+        border-left: 4px solid #34d399;
+    }
+
+    .notification.error {
+        border-left: 4px solid #ef4444;
+    }
+
+    @keyframes slide-up {
+        from {
+            transform: translate(-50%, 20px);
+            opacity: 0;
+        }
+        to {
+            transform: translate(-50%, 0);
+            opacity: 1;
+        }
+    }
+
+    .form-group-row {
+        display: flex;
+        gap: 16px;
+    }
+    .form-group-row .form-group {
+        flex: 1;
     }
 </style>

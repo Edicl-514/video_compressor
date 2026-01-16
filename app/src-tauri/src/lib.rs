@@ -42,6 +42,29 @@ async fn get_video_metadata(path: String) -> Result<video::VideoInfo, String> {
     video::get_metadata(&path, ffprobe_path.to_str().unwrap_or(""))
 }
 
+#[tauri::command]
+async fn detect_encoders() -> Result<video::DetectionReport, String> {
+    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    let ffmpeg_path = if ffmpeg_rel.exists() {
+         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
+    } else {
+        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+        if root_rel.exists() {
+            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
+        } else {
+            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
+        }
+    };
+    
+    let path_str = if ffmpeg_path.exists() {
+        ffmpeg_path.to_str().unwrap_or("ffmpeg").to_string()
+    } else {
+        "ffmpeg".to_string()
+    };
+
+    Ok(video::detect_system_encoders(&path_str))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -87,7 +110,7 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, get_video_metadata])
+        .invoke_handler(tauri::generate_handler![greet, scan_directory, get_video_metadata, detect_encoders])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
