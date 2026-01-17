@@ -17,9 +17,11 @@
     // Safety initialization for existing encoders
     config.availableVideoEncoders.forEach((e) => {
         if (!e.customParams) e.customParams = [];
+        if (e.isSupported === undefined) e.isSupported = true;
     });
     config.availableAudioEncoders.forEach((e) => {
         if (!e.customParams) e.customParams = [];
+        if (e.isSupported === undefined) e.isSupported = true;
     });
     let currentView = $state<"basic" | "advanced">("basic");
     let editingTarget = $state<{
@@ -56,9 +58,15 @@
             const report: any = await invoke("detect_encoders");
             console.log("Detected:", report);
 
-            // Reset visibility for all encoders first
-            config.availableVideoEncoders.forEach((e) => (e.visible = false));
-            config.availableAudioEncoders.forEach((e) => (e.visible = false));
+            // Reset visibility and supported status for all encoders first
+            config.availableVideoEncoders.forEach((e) => {
+                e.visible = false;
+                e.isSupported = false;
+            });
+            config.availableAudioEncoders.forEach((e) => {
+                e.visible = false;
+                e.isSupported = false;
+            });
 
             let addedVideo = 0;
             let addedAudio = 0;
@@ -70,6 +78,8 @@
                 );
                 if (existingIndex >= 0) {
                     config.availableVideoEncoders[existingIndex].visible = true;
+                    config.availableVideoEncoders[existingIndex].isSupported =
+                        true;
                     // Force update name to ensure consistency (e.g. migrating from old names)
                     config.availableVideoEncoders[existingIndex].name =
                         detected.name;
@@ -78,6 +88,7 @@
                         name: detected.name,
                         value: detected.value,
                         visible: true,
+                        isSupported: true,
                         customParams: [],
                     });
                     addedVideo++;
@@ -91,6 +102,8 @@
                 );
                 if (existingIndex >= 0) {
                     config.availableAudioEncoders[existingIndex].visible = true;
+                    config.availableAudioEncoders[existingIndex].isSupported =
+                        true;
                     config.availableAudioEncoders[existingIndex].name =
                         detected.name;
                 } else {
@@ -98,6 +111,7 @@
                         name: detected.name,
                         value: detected.value,
                         visible: true,
+                        isSupported: true,
                         customParams: [],
                     });
                     addedAudio++;
@@ -465,56 +479,60 @@
                     <div class="encoder-list">
                         <h4>Video Encoders</h4>
                         {#each config.availableVideoEncoders as enc, i}
-                            <div class="encoder-row">
-                                <label class="checkbox-label">
-                                    <input
-                                        type="checkbox"
-                                        bind:checked={enc.visible}
-                                    />
-                                    {enc.name}
-                                </label>
-                                <div class="encoder-actions">
-                                    {#if enc.customParams?.length > 0}
-                                        <span class="badge small"
-                                            >{enc.customParams.length} active</span
+                            {#if enc.isSupported}
+                                <div class="encoder-row">
+                                    <label class="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            bind:checked={enc.visible}
+                                        />
+                                        {enc.name}
+                                    </label>
+                                    <div class="encoder-actions">
+                                        {#if enc.customParams?.length > 0}
+                                            <span class="badge small"
+                                                >{enc.customParams.length} active</span
+                                            >
+                                        {/if}
+                                        <button
+                                            class="secondary-btn small-btn"
+                                            onclick={() =>
+                                                openParamsEditor("video", i)}
                                         >
-                                    {/if}
-                                    <button
-                                        class="secondary-btn small-btn"
-                                        onclick={() =>
-                                            openParamsEditor("video", i)}
-                                    >
-                                        Edit Params
-                                    </button>
+                                            Edit Params
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
+                            {/if}
                         {/each}
 
                         <h4>Audio Encoders</h4>
                         {#each config.availableAudioEncoders as enc, i}
-                            <div class="encoder-row">
-                                <label class="checkbox-label">
-                                    <input
-                                        type="checkbox"
-                                        bind:checked={enc.visible}
-                                    />
-                                    {enc.name}
-                                </label>
-                                <div class="encoder-actions">
-                                    {#if enc.customParams?.length > 0}
-                                        <span class="badge small"
-                                            >{enc.customParams.length} active</span
+                            {#if enc.isSupported}
+                                <div class="encoder-row">
+                                    <label class="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            bind:checked={enc.visible}
+                                        />
+                                        {enc.name}
+                                    </label>
+                                    <div class="encoder-actions">
+                                        {#if enc.customParams?.length > 0}
+                                            <span class="badge small"
+                                                >{enc.customParams.length} active</span
+                                            >
+                                        {/if}
+                                        <button
+                                            class="secondary-btn small-btn"
+                                            onclick={() =>
+                                                openParamsEditor("audio", i)}
                                         >
-                                    {/if}
-                                    <button
-                                        class="secondary-btn small-btn"
-                                        onclick={() =>
-                                            openParamsEditor("audio", i)}
-                                    >
-                                        Edit Params
-                                    </button>
+                                            Edit Params
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
+                            {/if}
                         {/each}
                     </div>
                 </div>

@@ -20,11 +20,14 @@ export interface VideoInfo {
     outputInfo?: VideoInfo;
 }
 
+// ... (imports remain same, not restated here)
+
 export interface EncoderConfig {
     name: string;
     value: string;
     visible: boolean; // Controls visibility in the basic settings dropdown
     customParams: string[]; // Extra arguments specific to this encoder, one per line
+    isSupported?: boolean; // Whether the encoder is currently supported/detected
 }
 
 export interface AppSettings {
@@ -74,7 +77,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     targetCRF: 23,
     targetVMAF: 93,
     ffmpegThreads: 2,
-    ffprobeThreads: 4,
+    ffprobeThreads: 4, // More parallel checks
     maxResolution: {
         enabled: false,
         width: 1920,
@@ -84,16 +87,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
     audioEncoder: 'aac',
     targetFormat: 'mp4',
     availableVideoEncoders: [
-        { name: 'libx264 (CPU)', value: 'libx264', visible: true, customParams: [] },
-        { name: 'libx265 (CPU)', value: 'libx265', visible: true, customParams: [] },
-        { name: 'libsvtav1 (CPU)', value: 'libsvtav1', visible: true, customParams: [] },
-        { name: 'h264_nvenc (HW)', value: 'h264_nvenc', visible: true, customParams: [] },
-        { name: 'hevc_nvenc (HW)', value: 'hevc_nvenc', visible: true, customParams: [] },
+        { name: 'libx264 (CPU)', value: 'libx264', visible: true, isSupported: true, customParams: [] },
+        { name: 'libx265 (CPU)', value: 'libx265', visible: true, isSupported: true, customParams: [] },
+        { name: 'libsvtav1 (CPU)', value: 'libsvtav1', visible: true, isSupported: true, customParams: [] },
+        { name: 'h264_nvenc (HW)', value: 'h264_nvenc', visible: true, isSupported: true, customParams: [] },
+        { name: 'hevc_nvenc (HW)', value: 'hevc_nvenc', visible: true, isSupported: true, customParams: [] },
     ],
     availableAudioEncoders: [
-        { name: 'aac (CPU)', value: 'aac', visible: true, customParams: [] },
-        { name: 'libmp3lame (CPU)', value: 'libmp3lame', visible: true, customParams: [] },
-        { name: 'libopus (CPU)', value: 'libopus', visible: true, customParams: [] },
+        { name: 'aac (CPU)', value: 'aac', visible: true, isSupported: true, customParams: [] },
+        { name: 'libmp3lame (CPU)', value: 'libmp3lame', visible: true, isSupported: true, customParams: [] },
+        { name: 'libopus (CPU)', value: 'libopus', visible: true, isSupported: true, customParams: [] },
     ],
     customFilters: [],
     enableCustomFiltersEditing: false,
