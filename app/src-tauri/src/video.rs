@@ -368,6 +368,21 @@ pub struct ProgressPayload {
     pub output_info: Option<VideoInfo>,
 }
 
+/// Payload for VMAF-guided CRF search progress
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VmafSearchPayload {
+    pub path: String,
+    pub iteration: u32,
+    pub max_iterations: u32,
+    pub current_crf: f32,
+    pub current_vmaf: f64,
+    pub target_vmaf: f32,
+    pub best_crf: Option<f32>,
+    pub best_vmaf: Option<f64>,
+    pub samples: Vec<(f32, f64)>, // (crf, vmaf) pairs collected
+}
+
 fn parse_time_str(time_str: &str) -> f64 {
     let parts: Vec<&str> = time_str.split(':').collect();
     if parts.len() == 3 {
@@ -377,6 +392,622 @@ fn parse_time_str(time_str: &str) -> f64 {
         return h * 3600.0 + m * 60.0 + s;
     }
     0.0
+}
+
+// --- VMAF-guided CRF Search Functions ---
+
+/// Get CRF range for an encoder
+fn get_crf_range(encoder: &str) -> (f32, f32) {
+    if encoder.contains("libx264") || encoder.contains("libx265") {
+        (18.0, 35.0) // CRF 0-51, practical range 18-35
+    } else if encoder.contains("libsvtav1") {
+        (20.0, 45.0) // SVT-AV1 CRF range
+    } else if encoder.contains("nvenc") {
+        (18.0, 35.0) // CQ range for NVENC
+    } else if encoder.contains("vp9") || encoder.contains("libvpx") {
+        (20.0, 45.0) // VP9 CRF range
+    } else {
+        (18.0, 40.0) // Generic default
+    }
+}
+
+/// Get CRF argument name for an encoder
+fn get_crf_arg(encoder: &str) -> &'static str {
+    if encoder.contains("nvenc") {
+        "-cq"
+    } else if encoder.contains("libx264") || encoder.contains("libx265") || 
+              encoder.contains("libsvtav1") || encoder.contains("vp9") || encoder.contains("libvpx") {
+        "-crf"
+    } else {
+        "-q:v"
+    }
+}
+
+/// Compute sample segments for VMAF analysis during CRF search
+/// Returns (start_time, duration) pairs for segments to sample
+fn compute_sample_segments(duration_sec: f64, config: &CompressionConfig) -> Vec<(f64, f64)> {
+    if duration_sec < 20.0 {
+        // Short video: use full duration
+        return vec![(0.0, duration_sec)];
+    }
+
+    let mut count = config.vmaf_segment_count;
+    let mut dur = config.vmaf_segment_duration as f64;
+
+    if config.vmaf_auto_config {
+        dur = 20.0;
+        let duration_min = duration_sec / 60.0;
+        count = (duration_min / 12.0).ceil() as u32;
+        if count < 1 { count = 1; }
+    } else {
+        if dur > duration_sec { dur = duration_sec; }
+        if dur < 1.0 { dur = 1.0; }
+        if count < 1 { count = 1; }
+    }
+
+    let mut segments = Vec::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+    
+    for i in 0..count {
+        let numerator = (i as f64) + 1.0;
+        let denominator = (count as f64) + 2.0;
+        let base_start = duration_sec * (numerator / denominator);
+        
+        let pseudo_rand = ((now + i as u128 * 12345) % 100) as f64;
+        let offset_sec = (pseudo_rand - 50.0) / 10.0;
+        
+        let mut start = (base_start + offset_sec).round();
+        
+        if start < 0.0 { start = 0.0; }
+        if start + dur > duration_sec {
+            start = (duration_sec - dur).max(0.0);
+        }
+        start = start.round();
+        if start < 0.0 { start = 0.0; }
+
+        segments.push((start, dur));
+    }
+    segments
+}
+
+/// Compress a sample segment with a specific CRF and return the output path
+fn compress_sample_with_crf(
+    ffmpeg_path: &str,
+    input_path: &str,
+    temp_dir: &std::path::Path,
+    crf: f32,
+    segment_start: f64,
+    segment_duration: f64,
+    config: &CompressionConfig,
+    pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    input_key: &str,
+) -> Option<String> {
+    let sample_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+    let sample_output = temp_dir.join(format!("vmaf_sample_{}_{}.{}", sample_id, crf as i32, config.target_format));
+    let sample_output_str = sample_output.to_string_lossy().to_string();
+
+    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
+    let crf_arg = get_crf_arg(&v_enc);
+
+    // Round timestamps to integers to avoid frame misalignment
+    let ss = segment_start.round() as i64;
+    let t = segment_duration.round() as i64;
+
+    let mut args = vec![
+        "-y".to_string(),
+        "-hide_banner".to_string(),
+        "-v".to_string(), "error".to_string(),
+        "-ss".to_string(), ss.to_string(),
+        "-t".to_string(), t.to_string(),
+        "-i".to_string(), input_path.to_string(),
+        "-c:v".to_string(), v_enc.clone(),
+        crf_arg.to_string(), format!("{}", crf),
+        "-an".to_string(), // No audio for sample
+    ];
+
+    // Add encoder-specific params
+    if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
+        for param in &enc_cfg.custom_params {
+            let parts: Vec<&str> = param.split_whitespace().collect();
+            for p in parts {
+                args.push(p.to_string());
+            }
+        }
+    }
+
+    args.push(sample_output_str.clone());
+
+    let mut command = Command::new(ffmpeg_path);
+    command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("Failed to spawn sample compression: {}", e);
+            return None;
+        }
+    };
+
+    let pid = child.id();
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.insert(input_key.to_string(), pid);
+        }
+    }
+
+    let output = child.wait_with_output();
+    
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.remove(input_key);
+        }
+    }
+
+    match output {
+        Ok(o) if o.status.success() => Some(sample_output_str),
+        _ => {
+            // Cleanup failed attempt
+            let _ = std::fs::remove_file(&sample_output);
+            None
+        }
+    }
+}
+
+/// Run VMAF for a sample pair and return the score
+/// Note: sample_path is ALREADY a trimmed segment, so we only apply -ss/-t to the reference
+fn compute_sample_vmaf(
+    ffmpeg_path: &str,
+    ffprobe_path: &str,
+    reference_path: &str,
+    sample_path: &str,
+    model_path: &str,
+    segment_start: f64,
+    segment_duration: f64,
+    use_cuda: bool,
+    pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    input_key: &str,
+) -> Option<f64> {
+    // Round timestamps to integers to avoid frame misalignment
+    let ss = segment_start.round() as i64;
+    let t = segment_duration.round() as i64;
+    
+    let model_esc = escape_path_for_filter(model_path);
+    
+    // Use n_subsample to speed up and avoid log files entirely
+    // libvmaf will print the score to stderr with -v info
+    let vmaf_opts = format!("model='path={}':n_subsample=1", model_esc);
+
+    let mut args = Vec::new();
+    args.push("-hide_banner".to_string());
+    args.push("-threads".to_string());
+    args.push(if use_cuda { "1".to_string() } else { "4".to_string() });
+    args.push("-v".to_string());
+    args.push("info".to_string()); // Need info level to see VMAF score output
+    
+    // Input 0: Sample (distorted) - already trimmed, read from start
+    if use_cuda {
+        args.push("-hwaccel".to_string()); args.push("cuda".to_string());
+        args.push("-hwaccel_output_format".to_string()); args.push("cuda".to_string());
+    }
+    args.push("-i".to_string());
+    args.push(sample_path.to_string());
+
+    // Input 1: Reference - apply -ss and -t to match the sample segment
+    if use_cuda {
+        let ref_info = get_metadata(reference_path, ffprobe_path);
+        let mut ref_decoder = None;
+        if let Ok(info) = ref_info {
+            ref_decoder = get_cuda_decoder(&info.encoder);
+        }
+        
+        args.push("-hwaccel".to_string()); args.push("cuda".to_string());
+        args.push("-hwaccel_output_format".to_string()); args.push("cuda".to_string());
+        
+        if let Some(dec) = ref_decoder {
+            args.push("-c:v".to_string()); args.push(dec.to_string());
+        }
+    }
+    
+    args.push("-ss".to_string()); args.push(ss.to_string());
+    args.push("-t".to_string()); args.push(t.to_string());
+    args.push("-i".to_string());
+    args.push(reference_path.to_string());
+
+    // Filter Complex - note: [0:v] is distorted (sample), [1:v] is reference
+    let filter = if use_cuda {
+        format!(
+            "[0:v]scale_cuda=format=yuv420p[dis];[1:v]scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
+            vmaf_opts
+        )
+    } else {
+        format!(
+            "[0:v]setpts=PTS-STARTPTS,format=yuv420p[dis];[1:v]setpts=PTS-STARTPTS,format=yuv420p[ref];[dis][ref]libvmaf={}",
+            vmaf_opts
+        )
+    };
+    
+    args.push("-filter_complex".to_string());
+    args.push(filter);
+    
+    args.push("-f".to_string());
+    args.push("null".to_string());
+    args.push("-".to_string());
+
+    println!("VMAF sample args: {:?}", args);
+
+    let mut command = Command::new(ffmpeg_path);
+    command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = command.spawn().ok()?;
+
+    let pid = child.id();
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.insert(input_key.to_string(), pid);
+        }
+    }
+
+    let output = child.wait_with_output();
+    
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.remove(input_key);
+        }
+    }
+
+    let o = output.ok()?;
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    
+    // Debug output
+    println!("VMAF stderr length: {} chars", stderr.len());
+    
+    // Parse VMAF score from stderr
+    // libvmaf outputs something like: "VMAF score: 95.123456"
+    // or with Lavfi: "[Parsed_libvmaf_X @ ...] VMAF score: 95.123456"
+    if let Some(idx) = stderr.find("VMAF score: ") {
+        let rest = &stderr[idx+12..];
+        let val_str = rest.split_whitespace().next().unwrap_or("0");
+        println!("Found VMAF score string: {}", val_str);
+        return val_str.parse().ok();
+    }
+    
+    // Alternative pattern: look for mean vmaf in summary lines
+    // "[libvmaf @ ...] VMAF score = 95.12"
+    if let Some(idx) = stderr.find("VMAF score = ") {
+        let rest = &stderr[idx+13..];
+        let val_str = rest.split_whitespace().next().unwrap_or("0");
+        println!("Found VMAF score (alt pattern): {}", val_str);
+        return val_str.parse().ok();
+    }
+
+    println!("No VMAF score found in stderr. First 500 chars: {}", &stderr[..stderr.len().min(500)]);
+    None
+}
+
+
+/// Linear interpolation to predict CRF for target VMAF
+fn interpolate_crf(samples: &[(f32, f64)], target_vmaf: f64) -> f32 {
+    if samples.len() < 2 {
+        return 23.0; // fallback
+    }
+
+    // Sort by CRF (ascending)
+    let mut sorted: Vec<(f32, f64)> = samples.to_vec();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    // Find two points to interpolate between
+    // Since higher CRF = lower quality = lower VMAF (generally),
+    // we want to find where target_vmaf fits
+    for i in 0..sorted.len() - 1 {
+        let (crf1, vmaf1) = sorted[i];
+        let (crf2, vmaf2) = sorted[i + 1];
+
+        // Check if target is between these two points
+        // Note: VMAF typically decreases as CRF increases
+        let vmaf_high = vmaf1.max(vmaf2);
+        let vmaf_low = vmaf1.min(vmaf2);
+        
+        if target_vmaf >= vmaf_low && target_vmaf <= vmaf_high {
+            // Linear interpolation: crf = crf1 + (target_vmaf - vmaf1) * (crf2 - crf1) / (vmaf2 - vmaf1)
+            if (vmaf2 - vmaf1).abs() < 0.1 {
+                return (crf1 + crf2) / 2.0;
+            }
+            let predicted = crf1 + ((target_vmaf - vmaf1) * (crf2 as f64 - crf1 as f64) / (vmaf2 - vmaf1)) as f32;
+            return predicted;
+        }
+    }
+
+    // Extrapolation if target is outside range
+    // Use last two points for extrapolation
+    let (crf1, vmaf1) = sorted[sorted.len() - 2];
+    let (crf2, vmaf2) = sorted[sorted.len() - 1];
+    
+    if (vmaf2 - vmaf1).abs() < 0.1 {
+        return crf2;
+    }
+    
+    let predicted = crf1 + ((target_vmaf - vmaf1) * (crf2 as f64 - crf1 as f64) / (vmaf2 - vmaf1)) as f32;
+    predicted
+}
+
+/// VMAF-guided CRF search algorithm
+/// Returns (best_crf, final_vmaf_score)
+fn search_optimal_crf(
+    app: &AppHandle,
+    ffmpeg_path: &str,
+    ffprobe_path: &str,
+    input_path: &str,
+    config: &CompressionConfig,
+    duration_sec: f64,
+    pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    cancelled_paths: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+) -> Result<(f32, f64), String> {
+    let target_vmaf = config.target_vmaf as f64;
+    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
+    let (min_crf, max_crf) = get_crf_range(&v_enc);
+    
+    let temp_dir = std::env::temp_dir();
+    let segments = compute_sample_segments(duration_sec, config);
+    
+    if segments.is_empty() {
+        return Err("No segments to sample".to_string());
+    }
+
+    // Use first segment for all samples
+    let (seg_start, seg_duration) = segments[0];
+
+    // Determine VMAF model
+    let model_filename = if config.vmaf_neg { "vmaf_v0.6.1neg.json" } else { "vmaf_v0.6.1.json" };
+    let model_path = find_vmaf_model(ffmpeg_path, model_filename)
+        .ok_or_else(|| format!("VMAF model {} not found", model_filename))?;
+
+    let max_iterations = 10u32;
+    let mut samples: Vec<(f32, f64)> = Vec::new();
+    let mut best_crf: Option<f32> = None;
+    let mut best_vmaf: Option<f64> = None;
+    let mut no_improvement_count = 0;
+
+    // Check cancellation helper
+    let check_cancelled = || -> bool {
+        if let Ok(set) = cancelled_paths.lock() {
+            set.contains(input_path)
+        } else {
+            false
+        }
+    };
+
+    // Initial samples: min, mid, max CRF
+    let initial_crfs = vec![min_crf, (min_crf + max_crf) / 2.0, max_crf];
+    
+    for (idx, &crf) in initial_crfs.iter().enumerate() {
+        if check_cancelled() {
+            cleanup_temp_samples(&temp_dir);
+            return Err("Cancelled".to_string());
+        }
+
+        let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+            path: input_path.to_string(),
+            iteration: idx as u32 + 1,
+            max_iterations,
+            current_crf: crf,
+            current_vmaf: 0.0,
+            target_vmaf: config.target_vmaf,
+            best_crf,
+            best_vmaf,
+            samples: samples.clone(),
+        });
+
+        // Compress sample
+        let sample_path = compress_sample_with_crf(
+            ffmpeg_path, input_path, &temp_dir, crf, seg_start, seg_duration, config, pids, input_path
+        );
+
+        if sample_path.is_none() {
+            println!("Failed to compress sample at CRF {}", crf);
+            continue;
+        }
+        let sample_path = sample_path.unwrap();
+
+        // Compute VMAF
+        let vmaf = compute_sample_vmaf(
+            ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path
+        );
+
+        // Cleanup sample
+        let _ = std::fs::remove_file(&sample_path);
+
+        if let Some(score) = vmaf {
+            samples.push((crf, score));
+            
+            // Update best if VMAF >= target and CRF is higher (smaller file)
+            if score >= target_vmaf {
+                if best_crf.is_none() || crf > best_crf.unwrap() {
+                    best_crf = Some(crf);
+                    best_vmaf = Some(score);
+                }
+            }
+
+            let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                path: input_path.to_string(),
+                iteration: idx as u32 + 1,
+                max_iterations,
+                current_crf: crf,
+                current_vmaf: score,
+                target_vmaf: config.target_vmaf,
+                best_crf,
+                best_vmaf,
+                samples: samples.clone(),
+            });
+        }
+    }
+
+    // Iterative search
+    for iter in 0..(max_iterations - 3) {
+        if check_cancelled() {
+            cleanup_temp_samples(&temp_dir);
+            return Err("Cancelled".to_string());
+        }
+
+        if samples.len() < 2 {
+            break;
+        }
+
+        // Predict CRF for target VMAF
+        let mut crf_guess = interpolate_crf(&samples, target_vmaf);
+        
+        // Clamp to range
+        crf_guess = crf_guess.max(min_crf).min(max_crf);
+        
+        // Check if we already have a sample close to this CRF
+        let already_sampled = samples.iter().any(|(c, _)| (c - crf_guess).abs() < 0.5);
+        if already_sampled {
+            // Slight adjustment
+            crf_guess += 1.0;
+            crf_guess = crf_guess.max(min_crf).min(max_crf);
+        }
+
+        let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+            path: input_path.to_string(),
+            iteration: 3 + iter + 1,
+            max_iterations,
+            current_crf: crf_guess,
+            current_vmaf: 0.0,
+            target_vmaf: config.target_vmaf,
+            best_crf,
+            best_vmaf,
+            samples: samples.clone(),
+        });
+
+        // Compress sample
+        let sample_path = compress_sample_with_crf(
+            ffmpeg_path, input_path, &temp_dir, crf_guess, seg_start, seg_duration, config, pids, input_path
+        );
+
+        if sample_path.is_none() {
+            println!("Failed to compress sample at CRF {}", crf_guess);
+            no_improvement_count += 1;
+            if no_improvement_count >= 3 { break; }
+            continue;
+        }
+        let sample_path = sample_path.unwrap();
+
+        // Compute VMAF
+        let vmaf = compute_sample_vmaf(
+            ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path
+        );
+
+        // Cleanup sample
+        let _ = std::fs::remove_file(&sample_path);
+
+        if let Some(score) = vmaf {
+            let old_best = best_crf;
+            samples.push((crf_guess, score));
+            
+            // Update best if VMAF >= target and CRF is higher
+            if score >= target_vmaf {
+                if best_crf.is_none() || crf_guess > best_crf.unwrap() {
+                    best_crf = Some(crf_guess);
+                    best_vmaf = Some(score);
+                }
+            }
+
+            // Check for improvement
+            if old_best == best_crf {
+                no_improvement_count += 1;
+            } else {
+                no_improvement_count = 0;
+            }
+
+            let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                path: input_path.to_string(),
+                iteration: 3 + iter + 1,
+                max_iterations,
+                current_crf: crf_guess,
+                current_vmaf: score,
+                target_vmaf: config.target_vmaf,
+                best_crf,
+                best_vmaf,
+                samples: samples.clone(),
+            });
+
+            // Early termination conditions
+            if no_improvement_count >= 3 {
+                println!("No improvement for 3 iterations, stopping search");
+                break;
+            }
+
+            // If we're very close to target and have a valid best, stop
+            if let Some(bv) = best_vmaf {
+                if (bv - target_vmaf).abs() < 0.5 {
+                    println!("Found CRF {} with VMAF {:.2} close to target {:.2}", best_crf.unwrap(), bv, target_vmaf);
+                    break;
+                }
+            }
+        } else {
+            no_improvement_count += 1;
+            if no_improvement_count >= 3 { break; }
+        }
+    }
+
+    cleanup_temp_samples(&temp_dir);
+
+    // Return results
+    if let (Some(crf), Some(vmaf)) = (best_crf, best_vmaf) {
+        Ok((crf, vmaf))
+    } else if !samples.is_empty() {
+        // Fallback: find the sample with VMAF closest to but >= target
+        let mut candidate: Option<(f32, f64)> = None;
+        for (c, v) in &samples {
+            if *v >= target_vmaf {
+                if candidate.is_none() || c > &candidate.unwrap().0 {
+                    candidate = Some((*c, *v));
+                }
+            }
+        }
+        if let Some((c, v)) = candidate {
+            Ok((c, v))
+        } else {
+            // No sample meets target, use lowest CRF (highest quality)
+            let mut min_sample = samples[0];
+            for s in &samples {
+                if s.0 < min_sample.0 {
+                    min_sample = *s;
+                }
+            }
+            Ok(min_sample)
+        }
+    } else {
+        // No samples at all, use mid CRF
+        Ok(((min_crf + max_crf) / 2.0, 0.0))
+    }
+}
+
+/// Cleanup temporary sample files
+fn cleanup_temp_samples(temp_dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("vmaf_sample_") {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
 }
 
 pub fn process_video(
@@ -390,6 +1021,13 @@ pub fn process_video(
     cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>,
 ) -> Result<(), String> {
+    // Clear any previous cancellation for this path (allows re-processing after cancel)
+    {
+        if let Ok(mut set) = cancelled_paths.lock() {
+            set.remove(&input_path);
+        }
+    }
+
     // 0. Resolve ffprobe path
     let ffprobe_path = if let Some(parent_dir) = std::path::Path::new(ffmpeg_path).parent() {
         let ffmpeg_path_buf = std::path::Path::new(ffmpeg_path);
@@ -445,6 +1083,56 @@ pub fn process_video(
         }
     }
 
+    // 3. VMAF-guided CRF Search (if compression mode is "vmaf")
+    let mut vmaf_derived_crf: Option<f32> = None;
+    let mut vmaf_search_score: Option<f64> = None;
+    
+    if config.compression_mode == "vmaf" {
+        let _ = app.emit("video-progress", ProgressPayload {
+            path: input_path.clone(),
+            progress: 0,
+            status: "Searching CRF".to_string(),
+            speed: 0.0,
+            bitrate_kbps: 0.0,
+            output_info: None,
+        });
+
+        match search_optimal_crf(
+            &app, ffmpeg_path, &ffprobe_path, &input_path, &config, duration_sec, &pids, &cancelled_paths
+        ) {
+            Ok((crf, vmaf)) => {
+                println!("VMAF search complete: CRF={}, VMAF={:.2}", crf, vmaf);
+                vmaf_derived_crf = Some(crf);
+                vmaf_search_score = Some(vmaf);
+                
+                let _ = app.emit("video-progress", ProgressPayload {
+                    path: input_path.clone(),
+                    progress: 0,
+                    status: format!("Found CRF {:.0}, compressing...", crf),
+                    speed: 0.0,
+                    bitrate_kbps: 0.0,
+                    output_info: None,
+                });
+            }
+            Err(e) => {
+                if e == "Cancelled" {
+                    let _ = app.emit("video-progress", ProgressPayload {
+                        path: input_path.clone(),
+                        progress: 0,
+                        status: "Cancelled".to_string(),
+                        speed: 0.0,
+                        bitrate_kbps: 0.0,
+                        output_info: None,
+                    });
+                    return Err("Cancelled during CRF search".to_string());
+                } else {
+                    println!("VMAF CRF search failed: {}, using default CRF 23", e);
+                    vmaf_derived_crf = Some(23.0); // fallback
+                }
+            }
+        }
+    }
+
     let mut args = Vec::new();
     args.push("-y".to_string());
     args.push("-hide_banner".to_string());
@@ -475,11 +1163,15 @@ pub fn process_video(
             }
         },
         "vmaf" => {
-            args.push("-crf".to_string());
-             args.push("23".to_string()); 
+            // Use CRF derived from VMAF search, or fallback to 23
+            let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);
+            let crf_arg = get_crf_arg(&v_enc);
+            args.push(crf_arg.to_string());
+            args.push(format!("{}", crf_to_use));
         },
         _ => {}
     }
+
 
     // Audio Encoder
     args.push("-c:a".to_string());
@@ -915,8 +1607,33 @@ pub fn process_video(
         let mut output_info = get_video_info(std::path::Path::new(&output_path), &ffprobe_path).ok();
         println!("Output info retrieved: {:?}", output_info.is_some());
 
-        // 5. Calculate VMAF if enabled
-        if config.enable_vmaf {
+        // 5. Handle VMAF: In "vmaf" compression mode, use the search score directly
+        //    In other modes with enable_vmaf, queue for post-compression VMAF calculation
+        if config.compression_mode == "vmaf" {
+            // Use the VMAF score from CRF search directly
+            if let Some(vmaf_score) = vmaf_search_score {
+                if let Some(ref mut info) = output_info {
+                    info.vmaf = Some(vmaf_score);
+                    info.vmaf_device = if config.vmaf_use_cuda { Some("CUDA".to_string()) } else { Some("CPU".to_string()) };
+                    info.vmaf_model = Some(if config.vmaf_neg { "vmaf_v0.6.1neg.json".to_string() } else { "vmaf_v0.6.1.json".to_string() });
+                }
+            }
+            
+            let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.clone(),
+                progress: 100,
+                status: "Done".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info,
+            });
+            if let Some(prefix) = pass_log_prefix_opt {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                cleanup_pass_logs(&prefix, &temp_output_path);
+            }
+            return Ok(());
+        } else if config.enable_vmaf {
+            // Other modes: queue for separate VMAF calculation
             let app_handle = app.clone();
             let in_p = input_path.clone();
             let ffmpeg_p = ffmpeg_path.to_string();

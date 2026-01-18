@@ -25,6 +25,19 @@ export interface VideoInfo {
     vmafModel?: string;
 }
 
+// VMAF CRF search progress event payload
+export interface VmafSearchProgress {
+    path: string;
+    iteration: number;
+    maxIterations: number;
+    currentCrf: number;
+    currentVmaf: number;
+    targetVmaf: number;
+    bestCrf?: number;
+    bestVmaf?: number;
+    samples: [number, number][]; // [crf, vmaf] pairs
+}
+
 // ... (imports remain same, not restated here)
 
 export interface EncoderConfig {

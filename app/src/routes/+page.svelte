@@ -58,6 +58,14 @@
           progressSum += (f.progress || 0) / 200;
         } else if (f.status === "Processing (Pass 2/2)") {
           progressSum += 0.5 + (f.progress || 0) / 200;
+        } else if (f.status.startsWith("Searching CRF")) {
+          // VMAF mode: CRF search = 50% of video's progress
+          // progress here is (iteration/maxIterations * 100) from backend
+          progressSum += ((f.progress || 0) / 100) * 0.5;
+        } else if (f.status.startsWith("Found CRF")) {
+          // VMAF mode: After CRF search (50% done), compression = 50%
+          // progress here tracks compression progress (0-100)
+          progressSum += 0.5 + ((f.progress || 0) / 100) * 0.5;
         } else if (f.status.startsWith("Processing")) {
           progressSum += (f.progress || 0) / 100;
         }
@@ -191,6 +199,7 @@
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let unlistenMouseMove: (() => void) | undefined;
+    let unlistenVmafSearch: (() => void) | undefined;
 
     const setup = async () => {
       // Listen for progress
@@ -252,6 +261,44 @@
           console.log(`Update ${path}: ${progress}% ${status}`);
         }
       });
+
+      // Listen for VMAF CRF search progress
+      unlistenVmafSearch = await listen(
+        "vmaf-search-progress",
+        (event: any) => {
+          const {
+            path,
+            iteration,
+            maxIterations,
+            currentCrf,
+            currentVmaf,
+            targetVmaf,
+            bestCrf,
+            bestVmaf,
+          } = event.payload;
+          const index = files.findIndex((f) => f.path === path);
+          if (index !== -1) {
+            // Update status with search progress
+            let statusText = `Searching CRF (${iteration}/${maxIterations})`;
+            if (currentVmaf > 0) {
+              statusText += ` | CRF ${Math.round(currentCrf)} → VMAF ${currentVmaf.toFixed(1)}`;
+            } else {
+              statusText += ` | Testing CRF ${Math.round(currentCrf)}...`;
+            }
+            if (bestCrf !== undefined && bestCrf !== null) {
+              statusText += ` | Best: CRF ${Math.round(bestCrf)}`;
+            }
+
+            files[index] = {
+              ...files[index],
+              status: statusText,
+              // Store as 0-100 scale based on search iteration
+              // This will be interpreted as 50% of total video progress by processingStats
+              progress: Math.round((iteration / maxIterations) * 100),
+            };
+          }
+        },
+      );
 
       console.log("Setting up Tauri file drop listeners...");
 
@@ -316,6 +363,7 @@
     return () => {
       if (unlisten) unlisten();
       if (unlistenProgress) unlistenProgress();
+      if (unlistenVmafSearch) unlistenVmafSearch();
       if (unlistenMouseMove) unlistenMouseMove();
     };
   });
@@ -550,6 +598,8 @@
     for (let i = 0; i < files.length; i++) {
       if (
         files[i].status.startsWith("Processing") ||
+        files[i].status.startsWith("Searching CRF") ||
+        files[i].status.startsWith("Found CRF") ||
         files[i].status === "Waiting for VMAF" ||
         files[i].status === "Evaluating"
       ) {
