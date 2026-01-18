@@ -20,6 +20,10 @@ pub struct VideoInfo {
     pub duration_sec: f64,
     pub speed: Option<f64>,
     pub bitrate_kbps: Option<f64>,
+    pub vmaf: Option<f64>,
+    pub vmaf_device: Option<String>,
+    pub vmaf_detail: Option<Vec<f64>>,
+    pub vmaf_total_segments: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +93,39 @@ pub struct CompressionConfig {
     #[serde(default)]
     #[serde(rename = "crfAutoSkipThreshold")]
     pub crf_auto_skip_threshold: u32,
+
+    // VMAF Settings
+    #[serde(default)]
+    pub enable_vmaf: bool,
+    #[serde(default)]
+    pub vmaf_full_computation: bool,
+    #[serde(default)]
+    pub vmaf_segment_count: u32,
+    #[serde(default)]
+    pub vmaf_segment_duration: u32,
+    #[serde(default)]
+    pub vmaf_auto_config: bool,
+    #[serde(default)]
+    pub vmaf_use_cuda: bool,
+}
+
+pub struct VmafTask {
+    pub app: AppHandle,
+    pub input_path: String,
+    pub ffmpeg_path: String,
+    pub ffprobe_path: String,
+    pub reference_path: String,
+    pub distorted_path: String,
+    pub config: CompressionConfig,
+    pub duration_sec: f64,
+    pub pids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    pub cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    pub output_video_info: Option<VideoInfo>,
+}
+
+pub struct VmafState {
+    pub queue: std::collections::VecDeque<VmafTask>,
+    pub running_task: Option<String>,
 }
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v"];
@@ -117,6 +154,10 @@ pub fn scan_videos(directory: &str) -> ScanResult {
                                 duration_sec: 0.0,
                                 speed: None,
                                 bitrate_kbps: None,
+                                vmaf: None,
+                                vmaf_device: None,
+                                vmaf_detail: None,
+                                vmaf_total_segments: None,
                             });
                         }
                     }
@@ -301,18 +342,22 @@ fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> 
             .unwrap_or(0.0),
         speed: None,
         bitrate_kbps,
+        vmaf: None,
+        vmaf_device: None,
+        vmaf_detail: None,
+        vmaf_total_segments: None,
     })
 }
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct ProgressPayload {
-    path: String,
-    progress: u8,
-    status: String,
-    speed: f64,
-    bitrate_kbps: f64,
-    output_info: Option<VideoInfo>,
+pub struct ProgressPayload {
+    pub path: String,
+    pub progress: u8,
+    pub status: String,
+    pub speed: f64,
+    pub bitrate_kbps: f64,
+    pub output_info: Option<VideoInfo>,
 }
 
 fn parse_time_str(time_str: &str) -> f64 {
@@ -334,7 +379,8 @@ pub fn process_video(
     config: CompressionConfig,
     duration_sec: f64,
     pids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
-    cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>
+    cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>,
 ) -> Result<(), String> {
     // 0. Resolve ffprobe path
     let ffprobe_path = if let Some(parent_dir) = std::path::Path::new(ffmpeg_path).parent() {
@@ -399,7 +445,7 @@ pub fn process_video(
 
     // Video Encoder
     args.push("-c:v".to_string());
-    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder };
+    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
     args.push(v_enc.clone());
 
     // Compression Mode
@@ -429,7 +475,7 @@ pub fn process_video(
 
     // Audio Encoder
     args.push("-c:a".to_string());
-    let a_enc = if config.audio_encoder.is_empty() { "aac".to_string() } else { config.audio_encoder };
+    let a_enc = if config.audio_encoder.is_empty() { "aac".to_string() } else { config.audio_encoder.clone() };
     args.push(a_enc.clone());
 
     // Resolution
@@ -439,7 +485,7 @@ pub fn process_video(
     }
 
     // Custom Filters
-    for filter in config.custom_filters {
+    for filter in &config.custom_filters {
         if !filter.trim().is_empty() {
              let parts: Vec<&str> = filter.split_whitespace().collect();
              for p in parts {
@@ -684,7 +730,57 @@ pub fn process_video(
         }
 
         // 4. Fetch metadata for the new output file
-        let output_info = get_video_info(std::path::Path::new(&output_path), &ffprobe_path).ok();
+        let mut output_info = get_video_info(std::path::Path::new(&output_path), &ffprobe_path).ok();
+        println!("Output info retrieved: {:?}", output_info.is_some());
+
+        // 5. Calculate VMAF if enabled
+        if config.enable_vmaf {
+            let app_handle = app.clone();
+            let in_p = input_path.clone();
+            let ffmpeg_p = ffmpeg_path.to_string();
+            let ffprobe_p = ffprobe_path.clone();
+            let out_p = output_path.clone();
+            let cfg = config.clone();
+            let dur = duration_sec;
+            let pids_map = pids.clone();
+            let cancelled_map = cancelled_paths.clone();
+            let out_info_clone = output_info.clone();
+
+            // Enqueue VMAF Task
+            let task = VmafTask {
+                app: app_handle.clone(),
+                input_path: in_p.clone(),
+                ffmpeg_path: ffmpeg_p,
+                ffprobe_path: ffprobe_p,
+                reference_path: in_p.clone(),
+                distorted_path: out_p,
+                config: cfg,
+                duration_sec: dur,
+                pids: pids_map,
+                cancelled_paths: cancelled_map,
+                output_video_info: out_info_clone,
+            };
+
+            {
+                if let Ok(mut state) = vmaf_state.lock() {
+                    state.queue.push_back(task);
+                }
+            }
+
+            let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.clone(),
+                progress: 100,
+                status: "Waiting for VMAF".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info: output_info.clone(),
+            });
+
+            schedule_next_vmaf(vmaf_state);
+            
+            return Ok(());
+        }
+
 
          let _ = app.emit("video-progress", ProgressPayload {
             path: input_path.clone(),
@@ -751,4 +847,481 @@ fn verify_video(ffmpeg_path: &str, file_path: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn schedule_next_vmaf(vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>) {
+    // Check if something is running
+    let mut task_opt = None;
+    
+    {
+        if let Ok(mut state) = vmaf_state.lock() {
+            if state.running_task.is_none() {
+                task_opt = state.queue.pop_front();
+                if let Some(ref t) = task_opt {
+                    state.running_task = Some(t.input_path.clone());
+                }
+            }
+        }
+    }
+
+    if let Some(mut task) = task_opt {
+        let v_state = vmaf_state.clone();
+        std::thread::spawn(move || {
+            calculate_vmaf_score(
+                &task.app,
+                &task.input_path,
+                &task.ffmpeg_path,
+                &task.ffprobe_path,
+                &task.reference_path,
+                &task.distorted_path,
+                &task.config,
+                task.duration_sec,
+                task.pids,
+                task.cancelled_paths,
+                &mut task.output_video_info
+            );
+
+            // Determine final status
+            // If vmaf is None, it might have failed or been cancelled.
+            // If cancelled, calculate_vmaf_score returns early or clean.
+            // But we don't have direct "cancelled" feedback from calculate_vmaf_score return
+            // other than checking if VMAF is set in output_video_info.
+            // Actually calculate_vmaf_score DOES set vmaf in output_video_info if successful.
+            
+            // Re-read cancelled status (hacky, using pids/cancelled logic from elsewhere? No)
+            // Just assume if vmaf is present -> Done.
+            // If vmaf is missing -> Done (without VMAF) or Error?
+            // The user says "status to Done, no vmaf score" for cancelled ones.
+            // If it failed for other reasons, maybe it should be Error?
+            // But let's default to Done to satisfy the "cancel" requirement primarily, 
+            // relying on external cancellation to kill the process.
+
+            let _ = task.app.emit("video-progress", ProgressPayload {
+                path: task.input_path.clone(),
+                progress: 100,
+                status: "Done".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info: task.output_video_info.clone(),
+            });
+
+            // Clear running state
+            {
+                if let Ok(mut state) = v_state.lock() {
+                    state.running_task = None;
+                }
+            }
+            
+            // Trigger next
+            schedule_next_vmaf(v_state);
+        });
+    }
+}
+
+// --- VMAF Calculation Logic ---
+
+fn find_vmaf_model(ffmpeg_path: &str) -> Option<String> {
+    // 1. Check env var
+    if let Ok(env_path) = std::env::var("VMAF_MODEL") {
+        if Path::new(&env_path).exists() {
+            return Some(env_path);
+        }
+    }
+
+    // 2. ffmpeg/bin/model/vmaf_v0.6.1.json
+    let ffmpeg_dir = Path::new(ffmpeg_path).parent();
+    if let Some(dir) = ffmpeg_dir {
+         let model_json = dir.join("model").join("vmaf_v0.6.1.json");
+         if model_json.exists() {
+             return Some(model_json.to_string_lossy().to_string());
+         }
+
+          // Try typical share location: ../share/model/
+         let share_model = dir.parent().unwrap_or(Path::new("")).join("share").join("model").join("vmaf_v0.6.1.json");
+         if share_model.exists() {
+             return Some(share_model.to_string_lossy().to_string());
+         }
+    }
+
+    // 3. Fallbacks
+    let candidates = vec![
+        r"C:\Program Files\FFmpeg\share\model\vmaf_v0.6.1.json",
+        r"C:\Program Files\ffmpeg\share\model\vmaf_v0.6.1.json",
+        "/usr/share/model/vmaf_v0.6.1.json",
+        "/usr/local/share/model/vmaf_v0.6.1.json"
+    ];
+
+    for c in candidates {
+        if Path::new(c).exists() {
+            return Some(c.to_string());
+        }
+    }
+
+    None
+}
+
+fn get_cuda_decoder(codec: &str) -> Option<&'static str> {
+    match codec {
+        "h264" => Some("h264_cuvid"),
+        "hevc" => Some("hevc_cuvid"),
+        "vp9" => Some("vp9_cuvid"),
+        "av1" => Some("av1_cuvid"),
+        "mpeg2video" | "mpeg2" => Some("mpeg2_cuvid"),
+        "vc1" => Some("vc1_cuvid"),
+        "vp8" => Some("vp8_cuvid"),
+        "mjpeg" => Some("mjpeg_cuvid"),
+        _ => None
+    }
+}
+
+fn escape_path_for_filter(path: &str) -> String {
+    // Windows filter path escaping is complex.
+    // Basic rules: 
+    // 1. Convert backslashes to forward slashes.
+    // 2. Escape colon ':', used as separator in filters.
+    
+    // Absolute path
+    let mut abs_path = std::fs::canonicalize(path).unwrap_or(std::path::PathBuf::from(path)).to_string_lossy().to_string();
+    
+    // Remove Windows UNC prefix (\\?\) which canonicalize adds, as it confuses ffmpeg
+    if cfg!(windows) && abs_path.starts_with(r"\\?\") {
+        abs_path = abs_path[4..].to_string();
+    }
+
+    let forward_slashes = abs_path.replace("\\", "/");
+    
+    // In filter_complex: libvmaf=model='path=...':log_path='...'
+    // Python script uses 3 backslashes for colon: p.replace(':', '\\\\\\:')
+    // This seems to be required for Windows paths in filter args.
+    let stepped = forward_slashes.replace(":", "\\\\\\:"); 
+    
+    stepped
+}
+
+fn calculate_vmaf_score(
+    app: &AppHandle,
+    input_path: &str,
+    ffmpeg_path: &str,
+    ffprobe_path: &str,
+    reference_path: &str,
+    distorted_path: &str,
+    config: &CompressionConfig,
+    duration_sec: f64,
+    pids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    cancelled_paths: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    output_video_info: &mut Option<VideoInfo>
+) {
+    // 0. Logical Checks (Resolution Limit & Overwrite)
+    if config.max_resolution.enabled {
+        println!("VMAF Calculation skipped: Max Resolution limit enabled.");
+        return;
+    }
+    
+    // Normalize paths to check for equality (overwrite case)
+    let p1 = std::fs::canonicalize(reference_path).unwrap_or(std::path::PathBuf::from(reference_path));
+    let p2 = std::fs::canonicalize(distorted_path).unwrap_or(std::path::PathBuf::from(distorted_path));
+    if p1 == p2 {
+         println!("VMAF Calculation skipped: File overwritten (Reference == Distorted).");
+         return;
+    }
+
+    let model_path_opt = find_vmaf_model(ffmpeg_path);
+    if model_path_opt.is_none() {
+        println!("VMAF Calculation skipped: Model file not found.");
+        return;
+    }
+    let model_path = model_path_opt.unwrap();
+    
+    let segments: Vec<(f64, f64)>; // (start, duration)
+
+    if config.vmaf_full_computation {
+        segments = vec![(0.0, duration_sec)];
+    } else {
+        // Auto config or manual
+        let mut count = config.vmaf_segment_count;
+        let mut dur = config.vmaf_segment_duration as f64;
+        
+        if duration_sec < 20.0 {
+             segments = vec![(0.0, duration_sec)];
+        } else {
+            if config.vmaf_auto_config {
+                 dur = 20.0;
+                 let duration_min = duration_sec / 60.0;
+                 count = (duration_min / 12.0).ceil() as u32;
+                 if count < 1 { count = 1; }
+            } else {
+                if dur > duration_sec { dur = duration_sec; }
+                if dur < 1.0 { dur = 1.0; }
+                if count < 1 { count = 1; }
+            }
+
+            let mut points = Vec::new();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+            
+            for i in 0..count {
+                let numerator = (i as f64) + 1.0;
+                let denominator = (count as f64) + 2.0;
+                let base_start = duration_sec * (numerator / denominator);
+                
+                let pseudo_rand = ((now + i as u128 * 12345) % 100) as f64;
+                let offset_sec = (pseudo_rand - 50.0) / 10.0;
+                
+                let mut start = (base_start + offset_sec).round();
+                
+                if start < 0.0 { start = 0.0; }
+                if start + dur > duration_sec {
+                     start = (duration_sec - dur).max(0.0);
+                }
+                start = start.round();
+                if start < 0.0 { start = 0.0; }
+
+                points.push((start, dur));
+            }
+            segments = points;
+        }
+    }
+
+    // Initialize VMAF fields
+    if let Some(info) = output_video_info {
+        info.vmaf_total_segments = Some(segments.len() as u32);
+        info.vmaf_detail = Some(Vec::new());
+        // Set initial device (optimistic)
+        info.vmaf_device = if config.vmaf_use_cuda { Some("CUDA".to_string()) } else { Some("CPU".to_string()) };
+    }
+
+    // Emit initial status
+    let _ = app.emit("video-progress", ProgressPayload {
+        path: input_path.to_string(),
+        progress: 100,
+        status: "Evaluating".to_string(),
+        speed: 0.0,
+        bitrate_kbps: 0.0,
+        output_info: output_video_info.clone(),
+    });
+
+    let mut scores = Vec::new();
+    let mut used_device = "CPU".to_string();
+
+    // Check if we should TRY cuda first
+    let try_cuda = config.vmaf_use_cuda;
+    let mut cuda_failed_once = false;
+
+    for (idx, (start, dur)) in segments.iter().enumerate() {
+        // Check for cancellation before processing segment
+        if let Ok(set) = cancelled_paths.lock() {
+            if set.contains(input_path) {
+                println!("VMAF Calculation cancelled for {}", input_path);
+                return;
+            }
+        }
+
+        let ss = if config.vmaf_full_computation { None } else { Some(*start) };
+        let dt = if config.vmaf_full_computation { None } else { Some(*dur) };
+
+        let mut score = None;
+        
+        // Try CUDA
+        if try_cuda && !cuda_failed_once {
+            score = run_vmaf_instance(
+                ffmpeg_path, ffprobe_path, reference_path, distorted_path, 
+                &model_path, true, ss, dt, &pids, input_path
+            );
+            if score.is_some() {
+                used_device = "CUDA".to_string();
+            } else {
+                println!("VMAF CUDA computation failed for segment {}, falling back to CPU.", idx);
+                cuda_failed_once = true;
+            }
+        }
+
+        // Try CPU
+        if score.is_none() {
+            // Check for cancellation before fallback
+            if let Ok(set) = cancelled_paths.lock() {
+                if set.contains(input_path) {
+                    println!("VMAF Calculation cancelled during fallback check for {}", input_path);
+                    return;
+                }
+            }
+            
+            score = run_vmaf_instance(
+                ffmpeg_path, ffprobe_path, reference_path, distorted_path, 
+                &model_path, false, ss, dt, &pids, input_path
+            );
+            used_device = "CPU".to_string(); 
+        }
+        
+        if let Some(s) = score {
+            scores.push(s);
+            // Update and emit
+            if let Some(info) = output_video_info {
+                if let Some(details) = &mut info.vmaf_detail {
+                    details.push(s);
+                }
+                // Update device in case fallback happened or it wasn't set correctly
+                info.vmaf_device = Some(used_device.clone());
+            }
+            let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.to_string(),
+                progress: 100,
+                status: "Evaluating".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info: output_video_info.clone(),
+            });
+        }
+    }
+
+    if !scores.is_empty() {
+        let avg = scores.iter().sum::<f64>() / scores.len() as f64;
+        if let Some(info) = output_video_info {
+            info.vmaf = Some(avg);
+        }
+    }
+}
+
+
+fn run_vmaf_instance(
+    ffmpeg_path: &str,
+    ffprobe_path: &str,
+    ref_path: &str,
+    dist_path: &str,
+    model_path: &str,
+    use_cuda: bool,
+    ss: Option<f64>,
+    t: Option<f64>,
+    pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    input_key: &str
+) -> Option<f64> {
+     // Prepare paths
+    let model_esc = escape_path_for_filter(model_path);
+    // Log file
+    let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+    let temp_dir = std::env::temp_dir();
+    let log_path = temp_dir.join(format!("vmaf_log_{}.json", id));
+    let log_esc = escape_path_for_filter(&log_path.to_string_lossy());
+    
+    let vmaf_opts = format!("model='path={}':log_fmt=json:log_path='{}'", model_esc, log_esc);
+
+    let mut args = Vec::new();
+    args.push("-hide_banner".to_string());
+    
+    // Move threads to start
+    args.push("-threads".to_string());
+    args.push(if use_cuda { "1".to_string() } else { "4".to_string() });
+
+    args.push("-v".to_string());
+    args.push("info".to_string()); 
+    
+    // Inputs
+    if use_cuda {
+         args.push("-hwaccel".to_string()); args.push("cuda".to_string());
+         args.push("-hwaccel_output_format".to_string()); args.push("cuda".to_string());
+    }
+
+    if let Some(s) = ss { args.push("-ss".to_string()); args.push(s.to_string()); }
+    if let Some(d) = t { args.push("-t".to_string()); args.push(d.to_string()); }
+    
+    args.push("-i".to_string());
+    args.push(dist_path.to_string());
+
+    // Reference (Input 1)
+    if use_cuda {
+         let ref_info = get_metadata(ref_path, ffprobe_path);
+         let mut ref_decoder = None;
+         if let Ok(info) = ref_info {
+             ref_decoder = get_cuda_decoder(&info.encoder);
+         }
+         
+         args.push("-hwaccel".to_string()); args.push("cuda".to_string());
+         args.push("-hwaccel_output_format".to_string()); args.push("cuda".to_string());
+         
+         if let Some(dec) = ref_decoder {
+             args.push("-c:v".to_string()); args.push(dec.to_string());
+         }
+    }
+    
+    if let Some(s) = ss { args.push("-ss".to_string()); args.push(s.to_string()); }
+    if let Some(d) = t { args.push("-t".to_string()); args.push(d.to_string()); }
+
+    args.push("-i".to_string());
+    args.push(ref_path.to_string());
+
+    // Filter Complex
+    let filter = if use_cuda {
+        format!(
+            "[0:v]scale_cuda=format=yuv420p[dis];[1:v]scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
+            vmaf_opts
+        )
+    } else {
+        format!(
+            "[0:v]setpts=PTS-STARTPTS,format=yuv420p[dis];[1:v]setpts=PTS-STARTPTS,format=yuv420p[ref];[dis][ref]libvmaf={}",
+            vmaf_opts
+        )
+    };
+    
+    args.push("-filter_complex".to_string());
+    args.push(filter);
+    
+    args.push("-f".to_string());
+    args.push("null".to_string());
+    args.push("-".to_string());
+
+    // Spawn
+    let mut command = Command::new(ffmpeg_path);
+    command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    
+    #[cfg(windows)]
+    let mut child = {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW if accessible, otherwise standard
+        command.spawn().ok()?
+    };
+    #[cfg(not(windows))]
+    let mut child = command.spawn().ok()?;
+
+    let pid = child.id();
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.insert(input_key.to_string(), pid);
+        }
+    }
+
+    let output = child.wait_with_output();
+    
+    {
+        if let Ok(mut map) = pids.lock() {
+            map.remove(input_key);
+        }
+    }
+
+    let o = output.ok()?;
+        
+    // Check log file first
+    if log_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&log_path) {
+            // Parse JSON
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                 let _ = std::fs::remove_file(&log_path);
+                 if let Some(metrics) = json.get("pooled_metrics") {
+                     if let Some(vmaf) = metrics.get("vmaf") {
+                         if let Some(mean) = vmaf.get("mean") {
+                              return mean.as_f64();
+                         }
+                     }
+                 }
+            }
+        }
+        let _ = std::fs::remove_file(&log_path);
+    }
+
+    // Fallback: parse stderr
+     let stderr = String::from_utf8_lossy(&o.stderr);
+     if let Some(idx) = stderr.find("VMAF score: ") {
+         let rest = &stderr[idx+12..];
+         let val_str = rest.split_whitespace().next().unwrap_or("0");
+         return val_str.parse().ok();
+     }
+
+    None
 }

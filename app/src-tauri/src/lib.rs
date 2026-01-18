@@ -19,6 +19,7 @@ struct SystemStats {
 struct ProcessingState {
     pids: Arc<Mutex<HashMap<String, u32>>>,
     cancelled_paths: Arc<Mutex<HashSet<String>>>,
+    vmaf_state: Arc<Mutex<video::VmafState>>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -97,14 +98,16 @@ async fn start_processing(
     let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
     let pids = state.pids.clone();
     let cancelled_paths = state.cancelled_paths.clone();
+    let vmaf_state = state.vmaf_state.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        video::process_video(app, &ffmpeg_path, input_path, output_path, config, duration_sec, pids, cancelled_paths)
+        video::process_video(app, &ffmpeg_path, input_path, output_path, config, duration_sec, pids, cancelled_paths, vmaf_state)
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn cancel_processing(
+    app: AppHandle,
     state: State<'_, ProcessingState>,
     path: String
 ) -> Result<(), String> {
@@ -134,6 +137,30 @@ async fn cancel_processing(
                 .map_err(|e| e.to_string())?;
         }
     }
+
+    // Connect to VMAF State to remove from queue if present
+    let mut removed_from_queue = false;
+    {
+        if let Ok(mut v_state) = state.vmaf_state.lock() {
+             if let Some(pos) = v_state.queue.iter().position(|t| t.input_path == path) {
+                 v_state.queue.remove(pos);
+                 removed_from_queue = true;
+             }
+        }
+    }
+
+    if removed_from_queue {
+        // Emit Done status as requested (Status Done, No VMAF)
+        let _ = app.emit("video-progress", video::ProgressPayload {
+             path: path.clone(),
+             progress: 100,
+             status: "Done".to_string(),
+             speed: 0.0,
+             bitrate_kbps: 0.0,
+             output_info: None, // Or we could try to fetch it, but None implies no update to info
+        });
+    }
+
     Ok(())
 }
 
@@ -146,6 +173,10 @@ pub fn run() {
             app.manage(ProcessingState {
                 pids: Arc::new(Mutex::new(HashMap::new())),
                 cancelled_paths: Arc::new(Mutex::new(HashSet::new())),
+                vmaf_state: Arc::new(Mutex::new(video::VmafState {
+                    queue: std::collections::VecDeque::new(),
+                    running_task: None,
+                })),
             });
 
             let handle = app.handle().clone();

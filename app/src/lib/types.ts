@@ -18,6 +18,10 @@ export interface VideoInfo {
     speed?: number;
     bitrateKbps?: number;
     outputInfo?: VideoInfo;
+    vmaf?: number; // VMAF score (0-100)
+    vmafDevice?: string; // "CPU" or "CUDA"
+    vmafDetail?: number[]; // Detail scores per segment
+    vmafTotalSegments?: number;
 }
 
 // ... (imports remain same, not restated here)
@@ -69,6 +73,14 @@ export interface AppSettings {
     // CRF mode settings
     crfAutoSkip: boolean; // skip if output bitrate > input bitrate * threshold
     crfAutoSkipThreshold: number; // percentage, e.g. 100 for 1.0x
+
+    // VMAF Settings
+    enableVmaf: boolean;
+    vmafFullComputation: boolean;
+    vmafSegmentCount: number;
+    vmafSegmentDuration: number;
+    vmafAutoConfig: boolean;
+    vmafUseCuda: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -103,5 +115,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     suffix: '_compressed',
     minBitrateThreshold: 0,
     crfAutoSkip: false,
-    crfAutoSkipThreshold: 100
+    crfAutoSkipThreshold: 100,
+
+    // VMAF Settings
+    enableVmaf: false,
+    vmafFullComputation: false, // Option 2: Full computation (Slow)
+    vmafSegmentCount: 10,        // Option 3: Number of segments (if not full)
+    vmafSegmentDuration: 5,     // Option 3: Duration per segment (if not full)
+    vmafAutoConfig: true,       // Option 3: Auto set segments/duration
+    vmafUseCuda: false          // Option 4: Experimental CUDA
 };

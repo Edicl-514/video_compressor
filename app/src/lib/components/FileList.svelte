@@ -36,6 +36,7 @@
                     <th>Bitrate</th>
                     <th>Encoder</th>
                     <th>Status</th>
+                    <th>VMAF</th>
                     <th class="progress-col">Progress</th>
                 </tr>
             </thead>
@@ -130,6 +131,60 @@
                                 {file.status}
                             </span>
                         </td>
+
+                        <!-- VMAF Score -->
+                        <td>
+                            {#if file.status === "Evaluating"}
+                                <div class="vmaf-cell">
+                                    <span
+                                        class="vmaf-evaluating"
+                                        title="Evaluating VMAF Segments"
+                                    >
+                                        {file.vmafDetail
+                                            ? file.vmafDetail.length
+                                            : 0} / {file.vmafTotalSegments ||
+                                            "?"}
+                                    </span>
+                                    {#if file.vmafDevice}
+                                        <span
+                                            class="vmaf-device"
+                                            title="Computing using {file.vmafDevice}"
+                                            >{file.vmafDevice === "CUDA"
+                                                ? "⚡"
+                                                : "🖥️"}</span
+                                        >
+                                    {/if}
+                                </div>
+                            {:else if file.vmaf !== undefined && file.vmaf !== null}
+                                <div class="vmaf-cell">
+                                    <span
+                                        class="vmaf-score"
+                                        class:high-score={file.vmaf >= 93}
+                                        class:med-score={file.vmaf >= 80 &&
+                                            file.vmaf < 93}
+                                        class:low-score={file.vmaf < 80}
+                                        title={file.vmafDetail &&
+                                        file.vmafDetail.length > 0
+                                            ? `Avg: ${file.vmaf.toFixed(2)}\nSegments:\n${file.vmafDetail.map((s, i) => `#${i + 1}: ${s.toFixed(2)}`).join("\n")}`
+                                            : undefined}
+                                    >
+                                        {file.vmaf.toFixed(2)}
+                                    </span>
+                                    {#if file.vmafDevice}
+                                        <span
+                                            class="vmaf-device"
+                                            title="Computed using {file.vmafDevice}"
+                                            >{file.vmafDevice === "CUDA"
+                                                ? "⚡"
+                                                : "🖥️"}</span
+                                        >
+                                    {/if}
+                                </div>
+                            {:else}
+                                <span class="vmaf-placeholder">-</span>
+                            {/if}
+                        </td>
+
                         <td>
                             <div class="progress-bar">
                                 <div
@@ -272,5 +327,37 @@
         color: #86efac;
         padding: 2px 4px;
         border-radius: 4px;
+    }
+
+    .vmaf-cell {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .vmaf-device {
+        font-size: 0.8rem;
+        cursor: help;
+        opacity: 0.8;
+    }
+    .vmaf-score {
+        font-weight: bold;
+        font-family: monospace;
+    }
+    .high-score {
+        color: #86efac; /* Green-400 */
+    }
+    .med-score {
+        color: #fbbf24; /* Amber-400 */
+    }
+    .low-score {
+        color: #f87171; /* Red-400 */
+    }
+    .vmaf-placeholder {
+        color: #555;
+    }
+    .vmaf-evaluating {
+        font-family: monospace;
+        color: #fbbf24;
+        font-weight: 500;
     }
 </style>

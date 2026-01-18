@@ -158,6 +158,9 @@
         ) {
             config.compressionMode = CompressionMode.CRF; // Fallback
         }
+        if (config.maxResolution.enabled) {
+            config.enableVmaf = false;
+        }
     }
 
     function openParamsEditor(
@@ -459,6 +462,96 @@
                         files will be overwritten.
                     </small>
                 </div>
+
+                <div class="form-group">
+                    <span class="group-label">VMAF Configuration</span>
+
+                    <div class="vmaf-settings">
+                        <div class="row">
+                            <label class="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    bind:checked={config.enableVmaf}
+                                    disabled={config.maxResolution.enabled}
+                                />
+                                Auto calculate VMAF score after compression
+                                {#if config.maxResolution.enabled}
+                                    <span class="warning-text"
+                                        >(Disabled by Resolution Limit)</span
+                                    >
+                                {/if}
+                            </label>
+                        </div>
+                        {#if config.maxResolution.enabled && config.enableVmaf}
+                            <!-- Automatically uncheck if enabled -->
+                            <script>
+                                // This is reactive in Svelte 5 logic already by nature of $derived or simple if logic
+                                // But here we are in script module. We can use effect or just do it in the change handler
+                                // of resolution limit.
+                                // We handled it in toggleResolutionLimit roughly for Mode.
+                            </script>
+                        {/if}
+
+                        <div class="row">
+                            <label class="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    bind:checked={config.vmafFullComputation}
+                                />
+                                Full Video Calculation (Sluggish)
+                            </label>
+                        </div>
+
+                        {#if !config.vmafFullComputation}
+                            <div class="row">
+                                <label class="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        bind:checked={config.vmafAutoConfig}
+                                    />
+                                    Auto Configure Segments
+                                </label>
+                            </div>
+                            <div
+                                class="row nested-row"
+                                class:disabled={config.vmafAutoConfig}
+                            >
+                                <div class="sub-input">
+                                    <label for="vmaf-seg-count">Segments</label>
+                                    <input
+                                        type="number"
+                                        id="vmaf-seg-count"
+                                        bind:value={config.vmafSegmentCount}
+                                        min="1"
+                                        max="100"
+                                    />
+                                </div>
+                                <div class="sub-input">
+                                    <label for="vmaf-seg-dur"
+                                        >Duration (s)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="vmaf-seg-dur"
+                                        bind:value={config.vmafSegmentDuration}
+                                        min="1"
+                                        max="60"
+                                    />
+                                </div>
+                            </div>
+                        {/if}
+
+                        <div class="row" style="margin-top: 8px;">
+                            <label class="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    bind:checked={config.vmafUseCuda}
+                                />
+                                Use CUDA Acceleration (Experimental)
+                            </label>
+                        </div>
+                    </div>
+                </div>
             {:else}
                 <!-- ADVANCED VIEW -->
                 <div class="section">
@@ -718,6 +811,12 @@
         align-items: center;
     }
 
+    .warning-text {
+        color: #eab308; /* yellow-500 */
+        font-size: 0.8rem;
+        margin-left: 5px;
+    }
+
     footer {
         padding: 16px 20px;
         background: #252525;
@@ -796,6 +895,36 @@
 
     .warning-box {
         margin-bottom: 8px;
+    }
+
+    .vmaf-settings {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 6px;
+    }
+
+    .nested-row {
+        margin-left: 12px;
+        gap: 16px;
+    }
+
+    .nested-row.disabled {
+        opacity: 0.5;
+        pointer-events: none;
+    }
+
+    .sub-input {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .sub-input input {
+        width: 60px;
     }
 
     @keyframes fadein {

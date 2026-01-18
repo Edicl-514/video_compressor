@@ -46,7 +46,12 @@
 
     if (totalCount > 0) {
       for (const f of files) {
-        if (f.status === "Done") {
+        if (
+          f.status === "Done" ||
+          f.status === "Evaluating" ||
+          f.status === "Waiting for VMAF" ||
+          f.status === "Skipped"
+        ) {
           progressSum += 1;
         } else if (f.status === "Processing") {
           progressSum += (f.progress || 0) / 100;
@@ -214,7 +219,24 @@
             bitrateKbps:
               bitrateKbps ?? bitrate_kbps ?? files[index].bitrateKbps,
             outputInfo: outputInfo ?? output_info ?? files[index].outputInfo,
+            // Check nested vmaf updates from outputInfo if available
+            vmaf: outputInfo?.vmaf ?? output_info?.vmaf ?? files[index].vmaf,
+            vmafDevice:
+              outputInfo?.vmafDevice ??
+              output_info?.vmafDevice ??
+              files[index].vmafDevice,
+            vmafDetail:
+              outputInfo?.vmafDetail ??
+              output_info?.vmafDetail ??
+              files[index].vmafDetail,
+            vmafTotalSegments:
+              outputInfo?.vmafTotalSegments ??
+              output_info?.vmafTotalSegments ??
+              files[index].vmafTotalSegments,
           };
+          console.log(
+            `Update ${path}: ${progress}% ${status} vmaf:${files[index].vmaf}`,
+          );
           console.log(`Update ${path}: ${progress}% ${status}`);
         }
       });
@@ -506,7 +528,11 @@
     // Find currently processing files and send cancel command
     // Use a loop over index to update state correctly
     for (let i = 0; i < files.length; i++) {
-      if (files[i].status === "Processing") {
+      if (
+        files[i].status === "Processing" ||
+        files[i].status === "Waiting for VMAF" ||
+        files[i].status === "Evaluating"
+      ) {
         const path = files[i].path;
         // Immediate UI feedback
         files[i] = { ...files[i], status: "Cancelled", progress: 0 };
