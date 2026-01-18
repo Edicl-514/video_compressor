@@ -69,6 +69,7 @@ export interface AppSettings {
     suffix: string;
 
     // Bitrate mode settings
+    twoPass: boolean;
     minBitrateThreshold: number; // kbps, 0 to disable
 
     // CRF mode settings
@@ -115,6 +116,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     customFilters: [],
     enableCustomFiltersEditing: false,
     suffix: '_compressed',
+    twoPass: false,
     minBitrateThreshold: 0,
     crfAutoSkip: false,
     crfAutoSkipThreshold: 100,

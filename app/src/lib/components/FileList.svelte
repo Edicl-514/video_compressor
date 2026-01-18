@@ -154,7 +154,21 @@
 
                         <td>
                             <span
-                                class="status-badge status-{file.status.toLowerCase()}"
+                                class="status-badge"
+                                class:status-scanning={file.status ===
+                                    "Scanning"}
+                                class:status-pending={file.status === "Pending"}
+                                class:status-processing={file.status.startsWith(
+                                    "Processing",
+                                )}
+                                class:status-done={file.status === "Done"}
+                                class:status-error={file.status === "Error"}
+                                class:status-cancelled={file.status ===
+                                    "Cancelled"}
+                                class:status-waiting-for-vmaf={file.status ===
+                                    "Waiting for VMAF"}
+                                class:status-evaluating={file.status ===
+                                    "Evaluating"}
                             >
                                 {file.status}
                             </span>

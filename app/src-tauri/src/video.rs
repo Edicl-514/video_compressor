@@ -86,6 +86,9 @@ pub struct CompressionConfig {
     #[serde(default)]
     pub suffix: String,
     #[serde(default)]
+    #[serde(rename = "twoPass")]
+    pub two_pass: bool,
+    #[serde(default)]
     #[serde(rename = "minBitrateThreshold")]
     pub min_bitrate_threshold: u32,
     #[serde(default)]
@@ -528,12 +531,183 @@ pub fn process_video(
 
     let temp_output_path = format!("{}.tmp.{}", output_path, config.target_format);
     
+    // 2-Pass Logic
+    let mut pass_log_prefix_opt = None;
+    if config.compression_mode == "bitrate" && config.two_pass {
+        let pass_log_prefix = format!("{}.passlog", temp_output_path);
+        pass_log_prefix_opt = Some(pass_log_prefix.clone());
+        
+        // Pass 1
+        let mut pass1_args = args.clone();
+        pass1_args.push("-pass".to_string());
+        pass1_args.push("1".to_string());
+        pass1_args.push("-passlogfile".to_string());
+        pass1_args.push(pass_log_prefix.clone());
+        pass1_args.push("-an".to_string()); // No audio for pass 1
+        pass1_args.push("-f".to_string());
+        pass1_args.push("null".to_string());
+        if cfg!(windows) {
+             pass1_args.push("NUL".to_string());
+        } else {
+             pass1_args.push("/dev/null".to_string());
+        }
+
+        let _ = app.emit("video-progress", ProgressPayload {
+            path: input_path.clone(),
+            progress: 0,
+            status: "Processing (Pass 1/2)".to_string(),
+            speed: 0.0,
+            bitrate_kbps: 0.0,
+            output_info: None,
+        });
+
+        println!("Starting Pass 1 for {}", input_path);
+        
+        let mut pass1_child = Command::new(ffmpeg_path)
+            .args(&pass1_args)
+            .stdout(Stdio::null()) // Use null to avoid blocking if we don't read it
+            .stderr(Stdio::piped()) 
+            .spawn()
+            .map_err(|e| format!("Failed to spawn Pass 1: {}", e))?;
+
+        let p1_pid = pass1_child.id();
+        {
+            if let Ok(mut map) = pids.lock() {
+                map.insert(input_path.clone(), p1_pid);
+            }
+        }
+
+        let p1_stderr = pass1_child.stderr.take().ok_or("Failed to capture Pass 1 stderr")?;
+        let p1_reader = BufReader::new(p1_stderr);
+
+        let mut p1_sec = 0.0;
+        let mut p1_speed = 0.0;
+        
+        for line in p1_reader.lines() {
+             let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+
+            // Check cancellation
+            let is_cancelled = {
+                 if let Ok(set) = cancelled_paths.lock() {
+                     set.contains(&input_path)
+                 } else {
+                     false
+                 }
+            };
+            if is_cancelled {
+                let _ = pass1_child.kill();
+                break;
+            }
+
+            // Simple parsing for Pass 1 (Speed & Time) - Bitrate is irrelevant/NA for Pass 1 (null output)
+            if let Some(idx) = line.find("out_time=") {
+                let time_val = line[idx+9..].trim();
+                p1_sec = parse_time_str(time_val);
+            } else if let Some(idx) = line.find("speed=") {
+                let speed_str = line[idx+6..].trim();
+                if let Some(s_idx) = speed_str.find('x') {
+                     p1_speed = speed_str[0..s_idx].parse().unwrap_or(0.0);
+                } else {
+                     p1_speed = speed_str.parse().unwrap_or(0.0);
+                }
+            }
+
+            if line.contains("progress=") {
+                 let percent = if duration_sec > 0.0 {
+                    ((p1_sec / duration_sec) * 100.0) as u8
+                } else {
+                    0
+                };
+                let _ = app.emit("video-progress", ProgressPayload {
+                    path: input_path.clone(),
+                    progress: percent.min(100),
+                    status: "Processing (Pass 1/2)".to_string(),
+                    speed: p1_speed,
+                    bitrate_kbps: 0.0, // Pass 1 has no meaningful bitrate
+                    output_info: None,
+                });
+            }
+        }
+
+        let p1_status = pass1_child.wait().map_err(|e| format!("Failed to wait on video Pass 1: {}", e))?;
+        
+        {
+            if let Ok(mut map) = pids.lock() {
+                map.remove(&input_path);
+            }
+        }
+
+        // Check cancellation again to be sure
+        let is_cancelled = {
+             if let Ok(mut set) = cancelled_paths.lock() {
+                 if set.contains(&input_path) {
+                     set.remove(&input_path); // Clear it here since we are stopping early
+                     true
+                 } else {
+                     false
+                 }
+             } else {
+                 false
+             }
+        };
+
+        if is_cancelled {
+             let _ = app.emit("video-progress", ProgressPayload {
+                path: input_path.clone(),
+                progress: 0,
+                status: "Cancelled".to_string(),
+                speed: 0.0,
+                bitrate_kbps: 0.0,
+                output_info: None,
+            });
+            // Robust cleanup Pass 1 logs
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if let Some(prefix) = &pass_log_prefix_opt {
+                 cleanup_pass_logs(prefix, &temp_output_path);
+            }
+            return Err("Cancelled during Pass 1".to_string());
+        }
+
+        if !p1_status.success() {
+             // Robust cleanup Pass 1 logs
+             std::thread::sleep(std::time::Duration::from_millis(200));
+             if let Some(prefix) = &pass_log_prefix_opt {
+                 cleanup_pass_logs(prefix, &temp_output_path);
+             }
+             return Err("Pass 1 failed (unknown error)".to_string());
+        }
+
+        // Prepare Pass 2 args (modify the original args which will be used for the main spawn)
+        args.push("-pass".to_string());
+        args.push("2".to_string());
+        args.push("-passlogfile".to_string());
+        args.push(pass_log_prefix);
+        
+         let _ = app.emit("video-progress", ProgressPayload {
+            path: input_path.clone(),
+            progress: 0,
+            status: "Processing (Pass 2/2)".to_string(),
+            speed: 0.0,
+            bitrate_kbps: 0.0,
+            output_info: None,
+        });
+    }
+
     args.push(temp_output_path.clone());
+
+    let status_str = if config.compression_mode == "bitrate" && config.two_pass {
+        "Processing (Pass 2/2)".to_string()
+    } else {
+        "Processing".to_string()
+    };
 
     let _ = app.emit("video-progress", ProgressPayload {
         path: input_path.clone(),
         progress: 0,
-        status: "Processing".to_string(),
+        status: status_str.clone(),
         speed: 0.0,
         bitrate_kbps: 0.0,
         output_info: None,
@@ -679,7 +853,7 @@ pub fn process_video(
             let _ = app.emit("video-progress", ProgressPayload {
                 path: input_path.clone(),
                 progress: percent.min(100),
-                status: "Processing".to_string(),
+                status: status_str.clone(),
                 speed: current_speed,
                 bitrate_kbps: current_bitrate,
                 output_info: None,
@@ -703,6 +877,9 @@ pub fn process_video(
             // Cleanup temp file
              if std::path::Path::new(&temp_output_path).exists() {
                  let _ = std::fs::remove_file(&temp_output_path);
+             }
+             if let Some(prefix) = &pass_log_prefix_opt {
+                 cleanup_pass_logs(prefix, &temp_output_path);
              }
              let _ = app.emit("video-progress", ProgressPayload {
                 path: input_path.clone(),
@@ -795,11 +972,20 @@ pub fn process_video(
             bitrate_kbps: 0.0,
             output_info,
         });
+        if let Some(prefix) = pass_log_prefix_opt {
+             // Best effort cleanup of passlog files
+             std::thread::sleep(std::time::Duration::from_millis(200)); // Ensure ffmpeg releases file handle
+             cleanup_pass_logs(&prefix, &temp_output_path);
+        }
+
         Ok(())
     } else {
          // Cleanup temp file
          if std::path::Path::new(&temp_output_path).exists() {
              let _ = std::fs::remove_file(&temp_output_path);
+         }
+         if let Some(prefix) = &pass_log_prefix_opt {
+             cleanup_pass_logs(prefix, &temp_output_path);
          }
          
          let is_cancelled = {
@@ -1357,4 +1543,24 @@ fn run_vmaf_instance(
      }
 
     None
+}
+
+fn cleanup_pass_logs(prefix: &str, temp_output_path: &str) {
+    if let Some(parent) = std::path::Path::new(temp_output_path).parent() {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            let prefix_buf = std::path::Path::new(prefix);
+            if let Some(prefix_filename) = prefix_buf.file_name().and_then(|s| s.to_str()) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                        // Match files starting with the prefix and having typical log extensions
+                        // Typical: prefix-0.log, prefix-0.log.mbtree, prefix.log, prefix.cut_tree
+                        if name.starts_with(prefix_filename) {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

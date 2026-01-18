@@ -321,6 +321,20 @@
                                     placeholder="0 (Disabled)"
                                 />
                             </div>
+                            <div class="extra-setting">
+                                <label class="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        bind:checked={config.twoPass}
+                                    />
+                                    Enable 2-Pass Encoding
+                                    <span
+                                        class="tooltip"
+                                        title="Runs encoding twice for better quality distribution at the target bitrate. Slower but higher quality."
+                                        >ℹ️</span
+                                    >
+                                </label>
+                            </div>
                         {:else if config.compressionMode === CompressionMode.CRF}
                             <div class="extra-setting">
                                 <label class="checkbox-label">

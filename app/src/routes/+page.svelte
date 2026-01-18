@@ -54,7 +54,11 @@
           f.status === "Skipped"
         ) {
           progressSum += 1;
-        } else if (f.status === "Processing") {
+        } else if (f.status === "Processing (Pass 1/2)") {
+          progressSum += (f.progress || 0) / 200;
+        } else if (f.status === "Processing (Pass 2/2)") {
+          progressSum += 0.5 + (f.progress || 0) / 200;
+        } else if (f.status.startsWith("Processing")) {
           progressSum += (f.progress || 0) / 100;
         }
         // Error, Pending, Cancelled count as 0 progress for now?
@@ -204,7 +208,10 @@
         const index = files.findIndex((f) => f.path === path);
         if (index !== -1) {
           // Don't overwrite 'Cancelled' status with stale backend updates
-          if (files[index].status === "Cancelled" && status === "Processing") {
+          if (
+            files[index].status === "Cancelled" &&
+            status.startsWith("Processing")
+          ) {
             console.log(
               `Ignoring stale 'Processing' update for cancelled file: ${path}`,
             );
@@ -542,7 +549,7 @@
     // Use a loop over index to update state correctly
     for (let i = 0; i < files.length; i++) {
       if (
-        files[i].status === "Processing" ||
+        files[i].status.startsWith("Processing") ||
         files[i].status === "Waiting for VMAF" ||
         files[i].status === "Evaluating"
       ) {
