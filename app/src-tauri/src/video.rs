@@ -24,6 +24,7 @@ pub struct VideoInfo {
     pub vmaf_device: Option<String>,
     pub vmaf_detail: Option<Vec<f64>>,
     pub vmaf_total_segments: Option<u32>,
+    pub vmaf_model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -107,6 +108,8 @@ pub struct CompressionConfig {
     pub vmaf_auto_config: bool,
     #[serde(default)]
     pub vmaf_use_cuda: bool,
+    #[serde(default)]
+    pub vmaf_neg: bool,
 }
 
 pub struct VmafTask {
@@ -158,6 +161,7 @@ pub fn scan_videos(directory: &str) -> ScanResult {
                                 vmaf_device: None,
                                 vmaf_detail: None,
                                 vmaf_total_segments: None,
+                                vmaf_model: None,
                             });
                         }
                     }
@@ -346,6 +350,7 @@ fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> 
         vmaf_device: None,
         vmaf_detail: None,
         vmaf_total_segments: None,
+        vmaf_model: None,
     })
 }
 
@@ -849,7 +854,7 @@ fn verify_video(ffmpeg_path: &str, file_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn schedule_next_vmaf(vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>) {
+pub fn schedule_next_vmaf(vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>) {
     // Check if something is running
     let mut task_opt = None;
     
@@ -920,7 +925,7 @@ fn schedule_next_vmaf(vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>>) {
 
 // --- VMAF Calculation Logic ---
 
-fn find_vmaf_model(ffmpeg_path: &str) -> Option<String> {
+fn find_vmaf_model(ffmpeg_path: &str, model_filename: &str) -> Option<String> {
     // 1. Check env var
     if let Ok(env_path) = std::env::var("VMAF_MODEL") {
         if Path::new(&env_path).exists() {
@@ -928,16 +933,16 @@ fn find_vmaf_model(ffmpeg_path: &str) -> Option<String> {
         }
     }
 
-    // 2. ffmpeg/bin/model/vmaf_v0.6.1.json
+    // 2. ffmpeg/bin/model/model_filename
     let ffmpeg_dir = Path::new(ffmpeg_path).parent();
     if let Some(dir) = ffmpeg_dir {
-         let model_json = dir.join("model").join("vmaf_v0.6.1.json");
+         let model_json = dir.join("model").join(model_filename);
          if model_json.exists() {
              return Some(model_json.to_string_lossy().to_string());
          }
 
           // Try typical share location: ../share/model/
-         let share_model = dir.parent().unwrap_or(Path::new("")).join("share").join("model").join("vmaf_v0.6.1.json");
+         let share_model = dir.parent().unwrap_or(Path::new("")).join("share").join("model").join(model_filename);
          if share_model.exists() {
              return Some(share_model.to_string_lossy().to_string());
          }
@@ -945,15 +950,15 @@ fn find_vmaf_model(ffmpeg_path: &str) -> Option<String> {
 
     // 3. Fallbacks
     let candidates = vec![
-        r"C:\Program Files\FFmpeg\share\model\vmaf_v0.6.1.json",
-        r"C:\Program Files\ffmpeg\share\model\vmaf_v0.6.1.json",
-        "/usr/share/model/vmaf_v0.6.1.json",
-        "/usr/local/share/model/vmaf_v0.6.1.json"
+        format!(r"C:\Program Files\FFmpeg\share\model\{}", model_filename),
+        format!(r"C:\Program Files\ffmpeg\share\model\{}", model_filename),
+        format!("/usr/share/model/{}", model_filename),
+        format!("/usr/local/share/model/{}", model_filename)
     ];
 
     for c in candidates {
-        if Path::new(c).exists() {
-            return Some(c.to_string());
+        if Path::new(&c).exists() {
+            return Some(c);
         }
     }
 
@@ -1025,9 +1030,36 @@ fn calculate_vmaf_score(
          return;
     }
 
-    let model_path_opt = find_vmaf_model(ffmpeg_path);
+    // Determine which model to use based on resolution and settings
+    let (width, height) = if let Some(info) = output_video_info {
+        let parts: Vec<&str> = info.resolution.split('x').collect();
+        if parts.len() == 2 {
+            let w = parts[0].parse::<u32>().unwrap_or(0);
+            let h = parts[1].parse::<u32>().unwrap_or(0);
+            (w, h)
+        } else {
+            (0, 0)
+        }
+    } else {
+        (0, 0)
+    };
+
+    // User threshold: <= 2k vs > 2k
+    // Using the long edge to determine resolution category (2560 covers QHD/2K).
+    let is_high_res = width.max(height) > 2560;
+    
+    let model_filename = match (is_high_res, config.vmaf_neg) {
+        (false, false) => "vmaf_v0.6.1.json",
+        (true, false) => "vmaf_4k_v0.6.1.json",
+        (false, true) => "vmaf_v0.6.1neg.json",
+        (true, true) => "vmaf_4k_v0.6.1neg.json",
+    };
+
+    println!("Selected VMAF model: {} (Resolution: {}x{}, Neg: {})", model_filename, width, height, config.vmaf_neg);
+
+    let model_path_opt = find_vmaf_model(ffmpeg_path, model_filename);
     if model_path_opt.is_none() {
-        println!("VMAF Calculation skipped: Model file not found.");
+        println!("VMAF Calculation skipped: Model file {} not found.", model_filename);
         return;
     }
     let model_path = model_path_opt.unwrap();
@@ -1087,6 +1119,7 @@ fn calculate_vmaf_score(
         info.vmaf_detail = Some(Vec::new());
         // Set initial device (optimistic)
         info.vmaf_device = if config.vmaf_use_cuda { Some("CUDA".to_string()) } else { Some("CPU".to_string()) };
+        info.vmaf_model = Some(model_filename.to_string());
     }
 
     // Emit initial status

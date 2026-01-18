@@ -164,6 +164,76 @@ async fn cancel_processing(
     Ok(())
 }
 
+#[tauri::command]
+async fn compute_vmaf(
+    app: AppHandle,
+    state: State<'_, ProcessingState>,
+    input_path: String,
+    output_path: String,
+    config: video::CompressionConfig,
+    duration_sec: f64
+) -> Result<(), String> {
+    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
+         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
+    } else {
+        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+        if root_rel.exists() {
+            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
+        } else {
+            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
+        }
+    };
+    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+
+    let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
+    let ffprobe_path_buf = if ffprobe_rel.exists() {
+         std::fs::canonicalize(&ffprobe_rel).unwrap_or(ffprobe_rel)
+    } else {
+        let root_rel = PathBuf::from("ffmpeg/bin/ffprobe.exe");
+        if root_rel.exists() {
+            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
+        } else {
+            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffprobe.exe")
+        }
+    };
+    let ffprobe_path = ffprobe_path_buf.to_str().unwrap_or("ffprobe").to_string();
+
+    // Fetch output info
+    let output_video_info = video::get_metadata(&output_path, &ffprobe_path).ok();
+
+    let task = video::VmafTask {
+        app: app.clone(),
+        input_path: input_path.clone(),
+        ffmpeg_path,
+        ffprobe_path,
+        reference_path: input_path.clone(),
+        distorted_path: output_path,
+        config,
+        duration_sec,
+        pids: state.pids.clone(),
+        cancelled_paths: state.cancelled_paths.clone(),
+        output_video_info,
+    };
+
+    {
+        let mut v_state = state.vmaf_state.lock().map_err(|e| e.to_string())?;
+        v_state.queue.push_back(task);
+    }
+
+    let _ = app.emit("video-progress", video::ProgressPayload {
+        path: input_path.clone(),
+        progress: 100,
+        status: "Waiting for VMAF".to_string(),
+        speed: 0.0,
+        bitrate_kbps: 0.0,
+        output_info: None,
+    });
+
+    video::schedule_next_vmaf(state.vmaf_state.clone());
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -231,7 +301,7 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, get_video_metadata, detect_encoders, start_processing, cancel_processing])
+        .invoke_handler(tauri::generate_handler![greet, scan_directory, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

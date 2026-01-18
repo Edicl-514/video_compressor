@@ -22,6 +22,7 @@ export interface VideoInfo {
     vmafDevice?: string; // "CPU" or "CUDA"
     vmafDetail?: number[]; // Detail scores per segment
     vmafTotalSegments?: number;
+    vmafModel?: string;
 }
 
 // ... (imports remain same, not restated here)
@@ -81,6 +82,7 @@ export interface AppSettings {
     vmafSegmentDuration: number;
     vmafAutoConfig: boolean;
     vmafUseCuda: boolean;
+    vmafNeg: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -123,5 +125,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     vmafSegmentCount: 10,        // Option 3: Number of segments (if not full)
     vmafSegmentDuration: 5,     // Option 3: Duration per segment (if not full)
     vmafAutoConfig: true,       // Option 3: Auto set segments/duration
-    vmafUseCuda: false          // Option 4: Experimental CUDA
+    vmafUseCuda: false,          // Option 4: Experimental CUDA
+    vmafNeg: false
 };

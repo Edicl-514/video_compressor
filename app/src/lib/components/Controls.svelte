@@ -1,16 +1,22 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte";
     const dispatch = createEventDispatcher();
+
+    export let isProcessing = false;
+    export let isPaused = false;
 </script>
 
 <div class="controls">
     <div class="main-actions">
-        <button class="btn btn-primary" on:click={() => dispatch("start")}
-            >Start</button
-        >
-        <button class="btn btn-secondary" on:click={() => dispatch("pause")}
-            >Pause</button
-        >
+        {#if !isProcessing || isPaused}
+            <button class="btn btn-primary" on:click={() => dispatch("start")}
+                >{isPaused ? "Resume" : "Start"}</button
+            >
+        {:else}
+            <button class="btn btn-secondary" on:click={() => dispatch("pause")}
+                >Pause</button
+            >
+        {/if}
         <button class="btn btn-danger" on:click={() => dispatch("cancel")}
             >Cancel</button
         >

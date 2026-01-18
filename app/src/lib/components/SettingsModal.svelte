@@ -550,6 +550,15 @@
                                 Use CUDA Acceleration (Experimental)
                             </label>
                         </div>
+                        <div class="row" style="margin-top: 8px;">
+                            <label class="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    bind:checked={config.vmafNeg}
+                                />
+                                Anti-filter/Sharpening
+                            </label>
+                        </div>
                     </div>
                 </div>
             {:else}

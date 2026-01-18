@@ -1,6 +1,34 @@
 <script lang="ts">
     import type { VideoInfo } from "$lib/types";
+    import { invoke } from "@tauri-apps/api/core";
+    import { settingsStore } from "$lib/stores/settings.svelte";
+
     export let files: VideoInfo[] = [];
+
+    function canComputeVmaf(file: VideoInfo): boolean {
+        return (
+            file.status === "Done" &&
+            !!file.outputInfo &&
+            file.resolution === file.outputInfo.resolution &&
+            file.path !== file.outputInfo.path &&
+            (file.vmaf === undefined || file.vmaf === null)
+        );
+    }
+
+    async function triggerVmaf(file: VideoInfo) {
+        if (!canComputeVmaf(file)) return;
+
+        try {
+            await invoke("compute_vmaf", {
+                inputPath: file.path,
+                outputPath: file.outputInfo!.path,
+                config: settingsStore.value,
+                durationSec: file.durationSec || 0.0,
+            });
+        } catch (e) {
+            console.error("Failed to start VMAF computation:", e);
+        }
+    }
 
     function formatSize(bytes: number): string {
         if (bytes === 0) return "0 B";
@@ -133,7 +161,11 @@
                         </td>
 
                         <!-- VMAF Score -->
-                        <td>
+                        <td
+                            class="vmaf-col-cell"
+                            class:clickable={canComputeVmaf(file)}
+                            ondblclick={() => triggerVmaf(file)}
+                        >
                             {#if file.status === "Evaluating"}
                                 <div class="vmaf-cell">
                                     <span
@@ -148,7 +180,9 @@
                                     {#if file.vmafDevice}
                                         <span
                                             class="vmaf-device"
-                                            title="Computing using {file.vmafDevice}"
+                                            title="Computing using {file.vmafDevice}{file.vmafModel
+                                                ? ` (${file.vmafModel})`
+                                                : ''}"
                                             >{file.vmafDevice === "CUDA"
                                                 ? "⚡"
                                                 : "🖥️"}</span
@@ -173,7 +207,9 @@
                                     {#if file.vmafDevice}
                                         <span
                                             class="vmaf-device"
-                                            title="Computed using {file.vmafDevice}"
+                                            title="Computed using {file.vmafDevice}{file.vmafModel
+                                                ? ` (${file.vmafModel})`
+                                                : ''}"
                                             >{file.vmafDevice === "CUDA"
                                                 ? "⚡"
                                                 : "🖥️"}</span
@@ -308,6 +344,21 @@
     .status-cancelled {
         background-color: #451a03;
         color: #fbbf24;
+    }
+    .status-waiting-for-vmaf {
+        background-color: #1e3a8a;
+        color: #93c5fd;
+    }
+    .status-evaluating {
+        background-color: #3b0764;
+        color: #d8b4fe;
+    }
+
+    .vmaf-col-cell.clickable {
+        cursor: pointer;
+    }
+    .vmaf-col-cell.clickable:hover {
+        background-color: rgba(100, 108, 255, 0.1);
     }
 
     /* New styles for updated info */

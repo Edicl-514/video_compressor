@@ -18,6 +18,7 @@
   let files = $state<VideoInfo[]>([]);
   let isScanning = $state(false);
   let isProcessing = $state(false);
+  let isPaused = $state(false);
   let shouldStop = $state(false);
   let scanCounter = $state(0);
   let showSettings = $state(false);
@@ -233,6 +234,10 @@
               outputInfo?.vmafTotalSegments ??
               output_info?.vmafTotalSegments ??
               files[index].vmafTotalSegments,
+            vmafModel:
+              outputInfo?.vmafModel ??
+              output_info?.vmafModel ??
+              files[index].vmafModel,
           };
           console.log(
             `Update ${path}: ${progress}% ${status} vmaf:${files[index].vmaf}`,
@@ -450,6 +455,7 @@
 
     console.log("Start clicked");
     isProcessing = true;
+    isPaused = false;
     shouldStop = false;
 
     // Queue of indices to process
@@ -462,7 +468,7 @@
 
     async function worker() {
       while (queue.length > 0) {
-        if (shouldStop) break;
+        if (shouldStop || isPaused) break;
 
         const i = queue.shift();
         if (i === undefined) break;
@@ -484,9 +490,9 @@
         files = [...files];
 
         try {
-          // Check stop flag again before starting expensive operation
-          if (shouldStop) {
-            files[i].status = "Pending"; // Revert status if stopped right before start
+          // Check stop or pause flag again before starting expensive operation
+          if (shouldStop || isPaused) {
+            files[i].status = "Pending"; // Revert status if stopped or paused right before start
             files = [...files];
             break;
           }
@@ -518,12 +524,19 @@
   }
 
   function handlePause() {
-    console.log("Pause clicked (Suspend/Pause not fully implemented yet)");
+    isPaused = !isPaused;
+    if (!isPaused && isProcessing) {
+      // If we unpaused, we need to restart workers if none are running?
+      // Actually handleStart is already designed to process the queue.
+      // But workers are already gone. So we just call handleStart again.
+      handleStart();
+    }
   }
 
   async function handleCancel() {
     console.log("Cancel clicked");
     shouldStop = true;
+    isPaused = false; // Reset pause state on cancel
 
     // Find currently processing files and send cancel command
     // Use a loop over index to update state correctly
@@ -580,6 +593,8 @@
       totalProgress={processingStats?.totalProgress}
     />
     <Controls
+      {isProcessing}
+      {isPaused}
       on:start={handleStart}
       on:pause={handlePause}
       on:cancel={handleCancel}
