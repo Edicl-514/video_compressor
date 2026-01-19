@@ -23,6 +23,7 @@ export interface VideoInfo {
     vmafDetail?: number[]; // Detail scores per segment
     vmafTotalSegments?: number;
     vmafModel?: string;
+    vmafSearchEndProgress?: number; // Progress when VMAF search ended (for smooth progress)
 }
 
 // VMAF CRF search progress event payload

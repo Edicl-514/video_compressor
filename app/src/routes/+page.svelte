@@ -55,17 +55,19 @@
         ) {
           progressSum += 1;
         } else if (f.status === "Processing (Pass 1/2)") {
-          progressSum += (f.progress || 0) / 200;
+          // 2-pass mode: Pass 1 sends progress 0-50, use directly
+          progressSum += (f.progress || 0) / 100;
         } else if (f.status === "Processing (Pass 2/2)") {
-          progressSum += 0.5 + (f.progress || 0) / 200;
+          // 2-pass mode: Pass 2 sends progress 50-100, use directly
+          progressSum += (f.progress || 0) / 100;
         } else if (f.status.startsWith("Searching CRF")) {
-          // VMAF mode: CRF search = 50% of video's progress
-          // progress here is (iteration/maxIterations * 100) from backend
-          progressSum += ((f.progress || 0) / 100) * 0.5;
+          // Target VMAF mode: search phase sends progress 0-50
+          // Backend sends progress 0-50 directly, so use progress/100
+          progressSum += (f.progress || 0) / 100;
         } else if (f.status.startsWith("Found CRF")) {
-          // VMAF mode: After CRF search (50% done), compression = 50%
-          // progress here tracks compression progress (0-100)
-          progressSum += 0.5 + ((f.progress || 0) / 100) * 0.5;
+          // Target VMAF mode: compression phase sends progress 50-100
+          // Backend sends progress 50-100 directly, so use progress/100
+          progressSum += (f.progress || 0) / 100;
         } else if (f.status.startsWith("Processing")) {
           progressSum += (f.progress || 0) / 100;
         }
@@ -227,10 +229,26 @@
             return;
           }
 
+          // Calculate adjusted progress for VMAF mode compression phase
+          // Backend sends progress 50-100 for compression, but we want smooth transition
+          // from wherever the search ended (vmafSearchEndProgress) to 100
+          let adjustedProgress = progress;
+          if (status.startsWith("Found CRF")) {
+            const searchEndProgress = files[index].vmafSearchEndProgress ?? 50;
+            // Backend sends 50-100, map back to 0-100 for compression phase
+            const compressionPhaseProgress = Math.max(0, (progress - 50) * 2);
+            // Map to [searchEndProgress, 100]
+            const remainingRange = 100 - searchEndProgress;
+            adjustedProgress = Math.round(
+              searchEndProgress +
+                (compressionPhaseProgress / 100) * remainingRange,
+            );
+          }
+
           // Map both camelCase and snake_case to be safe, but use sprawled object for reactivity
           files[index] = {
             ...files[index],
-            progress,
+            progress: adjustedProgress,
             status,
             speed: speed ?? files[index].speed,
             bitrateKbps:
@@ -256,9 +274,9 @@
               files[index].vmafModel,
           };
           console.log(
-            `Update ${path}: ${progress}% ${status} vmaf:${files[index].vmaf}`,
+            `Update ${path}: ${adjustedProgress}% ${status} vmaf:${files[index].vmaf}`,
           );
-          console.log(`Update ${path}: ${progress}% ${status}`);
+          console.log(`Update ${path}: ${adjustedProgress}% ${status}`);
         }
       });
 
@@ -289,12 +307,16 @@
               statusText += ` | Best: CRF ${Math.round(bestCrf)}`;
             }
 
+            // Calculate progress: map iteration to 0-50% range
+            // The search phase can take up to 50% of total progress
+            const searchProgress = Math.round((iteration / maxIterations) * 50);
+
             files[index] = {
               ...files[index],
               status: statusText,
-              // Store as 0-100 scale based on search iteration
-              // This will be interpreted as 50% of total video progress by processingStats
-              progress: Math.round((iteration / maxIterations) * 100),
+              progress: searchProgress,
+              // Store the current search progress so compression can continue from here
+              vmafSearchEndProgress: searchProgress,
             };
           }
         },

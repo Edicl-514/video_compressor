@@ -1107,7 +1107,7 @@ pub fn process_video(
                 
                 let _ = app.emit("video-progress", ProgressPayload {
                     path: input_path.clone(),
-                    progress: 0,
+                    progress: 50, // Search phase complete (50%), starting compression
                     status: format!("Found CRF {:.0}, compressing...", crf),
                     speed: 0.0,
                     bitrate_kbps: 0.0,
@@ -1313,9 +1313,11 @@ pub fn process_video(
                 } else {
                     0
                 };
+                // Pass 1 is 0-50% of total progress
+                let mapped_percent = percent.min(100) / 2;
                 let _ = app.emit("video-progress", ProgressPayload {
                     path: input_path.clone(),
-                    progress: percent.min(100),
+                    progress: mapped_percent,
                     status: "Processing (Pass 1/2)".to_string(),
                     speed: p1_speed,
                     bitrate_kbps: 0.0, // Pass 1 has no meaningful bitrate
@@ -1380,7 +1382,7 @@ pub fn process_video(
         
          let _ = app.emit("video-progress", ProgressPayload {
             path: input_path.clone(),
-            progress: 0,
+            progress: 50, // Pass 1 complete (50%), starting Pass 2
             status: "Processing (Pass 2/2)".to_string(),
             speed: 0.0,
             bitrate_kbps: 0.0,
@@ -1392,13 +1394,23 @@ pub fn process_video(
 
     let status_str = if config.compression_mode == "bitrate" && config.two_pass {
         "Processing (Pass 2/2)".to_string()
+    } else if config.compression_mode == "vmaf" {
+        // Use "Found CRF" prefix so frontend can calculate progress as 50-100%
+        if let Some(crf) = vmaf_derived_crf {
+            format!("Found CRF {:.0}", crf)
+        } else {
+            "Processing".to_string()
+        }
     } else {
         "Processing".to_string()
     };
+    // Initial progress: 50 for phase 2 modes (Pass 2 or VMAF compression), 0 otherwise
+    let is_phase2 = (config.compression_mode == "bitrate" && config.two_pass) || config.compression_mode == "vmaf";
+    let initial_progress = if is_phase2 { 50 } else { 0 };
 
     let _ = app.emit("video-progress", ProgressPayload {
         path: input_path.clone(),
-        progress: 0,
+        progress: initial_progress,
         status: status_str.clone(),
         speed: 0.0,
         bitrate_kbps: 0.0,
@@ -1542,9 +1554,17 @@ pub fn process_video(
                 0
             };
             
+            // For VMAF mode or 2-pass mode Pass 2, map progress (0-100) to (50-100)
+            let is_two_pass_phase2 = config.compression_mode == "bitrate" && config.two_pass;
+            let final_percent = if config.compression_mode == "vmaf" || is_two_pass_phase2 {
+                50 + (percent.min(100) / 2)
+            } else {
+                percent.min(100)
+            };
+            
             let _ = app.emit("video-progress", ProgressPayload {
                 path: input_path.clone(),
-                progress: percent.min(100),
+                progress: final_percent,
                 status: status_str.clone(),
                 speed: current_speed,
                 bitrate_kbps: current_bitrate,
