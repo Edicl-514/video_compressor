@@ -101,6 +101,10 @@ export interface AppSettings {
     vmafAutoConfig: boolean;
     vmafUseCuda: boolean;
     vmafNeg: boolean;
+
+    // Encoder filter settings
+    showAllEncoders: boolean; // Show all available encoders without filtering
+    showOnlyHwEncoders: boolean; // Only show hardware-accelerated video encoders
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -146,5 +150,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     vmafSegmentDuration: 5,     // Option 3: Duration per segment (if not full)
     vmafAutoConfig: true,       // Option 3: Auto set segments/duration
     vmafUseCuda: false,          // Option 4: Experimental CUDA
-    vmafNeg: false
+    vmafNeg: false,
+
+    // Encoder filter settings
+    showAllEncoders: false,
+    showOnlyHwEncoders: false
 };

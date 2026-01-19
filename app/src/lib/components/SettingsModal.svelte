@@ -215,6 +215,84 @@
                 newParams;
         }
     }
+
+    // Encoder filter whitelists
+    const VIDEO_ENCODER_WHITELIST = [
+        "h264",
+        "libx264",
+        "hevc",
+        "h265",
+        "libx265",
+        "av1",
+        "vp8",
+        "libvpx",
+        "vp9",
+        "mpeg2",
+        "mpeg4",
+        "wmv",
+        "mjpeg",
+        "prores",
+        "dnxhd",
+        "rawvideo",
+        "png",
+        "bmp",
+        "gif",
+    ];
+
+    const AUDIO_ENCODER_WHITELIST = [
+        "aac",
+        "mp3",
+        "ac3",
+        "flac",
+        "opus",
+        "vorbis",
+        "alac",
+        "wavpack",
+    ];
+
+    // Hardware encoder keywords (same as backend)
+    const HW_KEYWORDS = [
+        "nvenc",
+        "amf",
+        "qsv",
+        "cuda",
+        "vaapi",
+        "vdpau",
+        "d3d12va",
+    ];
+
+    function shouldShowVideoEncoder(encoderValue: string): boolean {
+        // If showing only HW encoders, check if it's a hardware encoder
+        if (config.showOnlyHwEncoders) {
+            return HW_KEYWORDS.some((k) =>
+                encoderValue.toLowerCase().includes(k),
+            );
+        }
+
+        // If showing all encoders, always show
+        if (config.showAllEncoders) {
+            return true;
+        }
+
+        // Otherwise, filter by whitelist
+        return VIDEO_ENCODER_WHITELIST.some((w) =>
+            encoderValue.toLowerCase().includes(w.toLowerCase()),
+        );
+    }
+
+    function shouldShowAudioEncoder(encoderValue: string): boolean {
+        // Note: showOnlyHwEncoders does NOT affect audio encoders
+
+        // If showing all encoders, always show
+        if (config.showAllEncoders) {
+            return true;
+        }
+
+        // Otherwise, filter by whitelist
+        return AUDIO_ENCODER_WHITELIST.some((w) =>
+            encoderValue.toLowerCase().includes(w.toLowerCase()),
+        );
+    }
 </script>
 
 <div
@@ -445,7 +523,7 @@
                     <label for="video-encoder">Video Encoder</label>
                     <select id="video-encoder" bind:value={config.videoEncoder}>
                         {#each config.availableVideoEncoders as enc}
-                            {#if enc.visible}
+                            {#if enc.visible && shouldShowVideoEncoder(enc.value)}
                                 <option value={enc.value}>{enc.name}</option>
                             {/if}
                         {/each}
@@ -456,7 +534,7 @@
                     <label for="audio-encoder">Audio Encoder</label>
                     <select id="audio-encoder" bind:value={config.audioEncoder}>
                         {#each config.availableAudioEncoders as enc}
-                            {#if enc.visible}
+                            {#if enc.visible && shouldShowAudioEncoder(enc.value)}
                                 <option value={enc.value}>{enc.name}</option>
                             {/if}
                         {/each}
@@ -604,10 +682,39 @@
                             {/if}
                         </button>
                     </div>
+
+                    <!-- Encoder Filter Options -->
+                    <div class="encoder-filter-options">
+                        <label class="checkbox-label">
+                            <input
+                                type="checkbox"
+                                bind:checked={config.showAllEncoders}
+                            />
+                            Show All Available Encoders
+                            <span
+                                class="tooltip"
+                                title="When unchecked, only commonly used encoders are shown"
+                                >ℹ️</span
+                            >
+                        </label>
+                        <label class="checkbox-label">
+                            <input
+                                type="checkbox"
+                                bind:checked={config.showOnlyHwEncoders}
+                            />
+                            Only Show Hardware-Accelerated Video Encoders
+                            <span
+                                class="tooltip"
+                                title="Only show GPU/hardware encoders like NVENC, AMF, QSV"
+                                >ℹ️</span
+                            >
+                        </label>
+                    </div>
+
                     <div class="encoder-list">
                         <h4>Video Encoders</h4>
                         {#each config.availableVideoEncoders as enc, i}
-                            {#if enc.isSupported}
+                            {#if enc.isSupported && shouldShowVideoEncoder(enc.value)}
                                 <div class="encoder-row">
                                     <label class="checkbox-label">
                                         <input
@@ -636,7 +743,7 @@
 
                         <h4>Audio Encoders</h4>
                         {#each config.availableAudioEncoders as enc, i}
-                            {#if enc.isSupported}
+                            {#if enc.isSupported && shouldShowAudioEncoder(enc.value)}
                                 <div class="encoder-row">
                                     <label class="checkbox-label">
                                         <input
@@ -907,6 +1014,21 @@
         justify-content: space-between;
         align-items: center;
         margin-bottom: 12px;
+    }
+
+    .encoder-filter-options {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        background: rgba(100, 108, 255, 0.1);
+        border: 1px solid rgba(100, 108, 255, 0.2);
+        border-radius: 6px;
+        margin-bottom: 12px;
+    }
+
+    .encoder-filter-options .checkbox-label {
+        font-size: 0.85rem;
     }
 
     .encoder-list {

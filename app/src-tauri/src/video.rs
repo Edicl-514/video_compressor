@@ -217,63 +217,49 @@ pub fn detect_system_encoders(ffmpeg_path: &str) -> DetectionReport {
     }
 
     // 2. Filter & Test Video
-    let params_cpu = [
-        "libx264", "x264", "libx265", "x265", "libvpx", "libvpx-vp9", "vp9", 
-        "libaom-av1", "av1", "libsvtav1", "mpeg4", "libmpeg4", "wmv1", "wmv2", "mpeg2video", "msmpeg4v2"
-    ];
-    let hw_keywords = ["nvenc", "amf", "qsv", "cuda", "vaapi", "vdpau"];
+    let hw_keywords = ["nvenc", "amf", "qsv", "cuda", "vaapi", "vdpau","d3d12va"];
 
     for (name, desc) in all_video {
         let is_hw = hw_keywords.iter().any(|k| name.contains(k));
-        let is_target_cpu = params_cpu.contains(&name.as_str());
 
-        if is_hw || is_target_cpu {
-             let args = [
-                "-y", "-hide_banner", "-v", "error",
-                "-f", "lavfi", "-i", "color=size=1280x720:rate=30",
-                "-frames:v", "1", "-pix_fmt", "yuv420p",
-                "-c:v", &name, "-f", "null", "-"
-            ];
-            
-            match Command::new(ffmpeg_path).args(&args).output() {
-                Ok(o) if o.status.success() => {
-                    report.video.push(DetectedEncoder {
-                        name: if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) },
-                        value: name,
-                        is_hardware: is_hw,
-                        description: desc,
-                    });
-                },
-                _ => {}
-            }
+        let args = [
+            "-y", "-hide_banner", "-v", "error",
+            "-f", "lavfi", "-i", "color=size=1280x720:rate=30",
+            "-frames:v", "1", "-pix_fmt", "yuv420p",
+            "-c:v", &name, "-f", "null", "-"
+        ];
+        
+        match Command::new(ffmpeg_path).args(&args).output() {
+            Ok(o) if o.status.success() => {
+                report.video.push(DetectedEncoder {
+                    name: if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) },
+                    value: name,
+                    is_hardware: is_hw,
+                    description: desc,
+                });
+            },
+            _ => {}
         }
     }
 
     // 3. Filter & Test Audio
-     let target_audio = [
-        "aac", "aac_mf", "libfdk_aac", "libmp3lame", "mp3_mf", "libopus", "opus", 
-        "flac", "alac", "ac3", "eac3", "wmav2", "wmav1", "mp2", "pcm_s16le", "libvorbis"
-    ];
-
     for (name, desc) in all_audio {
-        if target_audio.contains(&name.as_str()) {
-             let args = [
-                "-y", "-hide_banner", "-v", "error",
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                "-t", "1", "-c:a", &name, "-f", "null", "-"
-            ];
+        let args = [
+            "-y", "-hide_banner", "-v", "error",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", "1", "-c:a", &name, "-f", "null", "-"
+        ];
 
-             match Command::new(ffmpeg_path).args(&args).output() {
-                Ok(o) if o.status.success() => {
-                    report.audio.push(DetectedEncoder {
-                        name: format!("{} (CPU)", name),
-                        value: name,
-                        is_hardware: false,
-                        description: desc,
-                    });
-                },
-                _ => {}
-            }
+        match Command::new(ffmpeg_path).args(&args).output() {
+            Ok(o) if o.status.success() => {
+                report.audio.push(DetectedEncoder {
+                    name: format!("{} (CPU)", name),
+                    value: name,
+                    is_hardware: false,
+                    description: desc,
+                });
+            },
+            _ => {}
         }
     }
 
