@@ -76,8 +76,11 @@ export interface AppSettings {
     // For now, let's just hold a custom parameter string as a catch-all for "presets" + "filters"
     customFilters: string[];
 
+    // Custom VMAF calculation params
+    customVmafParams: string[];
+
     // Safety lock for manual filter editing
-    enableCustomFiltersEditing: boolean;
+
 
     // Output suffix
     suffix: string;
@@ -128,7 +131,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
         { name: 'libopus (CPU)', value: 'libopus', visible: true, isSupported: true, customParams: [] },
     ],
     customFilters: [],
-    enableCustomFiltersEditing: false,
+    customVmafParams: ['n_subsample=5'],
+
     suffix: '_compressed',
     twoPass: false,
     minBitrateThreshold: 0,

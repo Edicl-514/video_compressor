@@ -71,14 +71,13 @@
 
         <div class="content">
             <p class="description">
-                Add custom parameters (e.g., -preset slow). One parameter per
-                line.
+                Add custom parameters. One parameter per line.
             </p>
 
             <div class="param-input">
                 <input
                     type="text"
-                    placeholder="Enter parameter (e.g. -crf 18)"
+                    placeholder="Enter parameter"
                     bind:value={newParam}
                     onkeydown={(e) => e.key === "Enter" && addParam()}
                 />

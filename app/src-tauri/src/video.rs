@@ -113,6 +113,8 @@ pub struct CompressionConfig {
     pub vmaf_use_cuda: bool,
     #[serde(default)]
     pub vmaf_neg: bool,
+    #[serde(default)]
+    pub custom_vmaf_params: Vec<String>,
 }
 
 pub struct VmafTask {
@@ -572,6 +574,7 @@ fn compute_sample_vmaf(
     use_cuda: bool,
     pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
     input_key: &str,
+    custom_vmaf_params: &[String],
 ) -> Option<f64> {
     // Round timestamps to integers to avoid frame misalignment
     let ss = segment_start.round() as i64;
@@ -579,9 +582,15 @@ fn compute_sample_vmaf(
     
     let model_esc = escape_path_for_filter(model_path);
     
-    // Use n_subsample to speed up and avoid log files entirely
-    // libvmaf will print the score to stderr with -v info
-    let vmaf_opts = format!("model='path={}':n_subsample=1", model_esc);
+    // Build vmaf_opts with custom params
+    let mut vmaf_opts = format!("model='path={}'", model_esc);
+    for param in custom_vmaf_params {
+        let trimmed = param.trim();
+        if !trimmed.is_empty() {
+            vmaf_opts.push(':');
+            vmaf_opts.push_str(trimmed);
+        }
+    }
 
     let mut args = Vec::new();
     args.push("-hide_banner".to_string());
@@ -823,7 +832,7 @@ fn search_optimal_crf(
         // Compute VMAF
         let vmaf = compute_sample_vmaf(
             ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
-            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path
+            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
         );
 
         // Cleanup sample
@@ -907,7 +916,7 @@ fn search_optimal_crf(
         // Compute VMAF
         let vmaf = compute_sample_vmaf(
             ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
-            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path
+            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
         );
 
         // Cleanup sample
@@ -2080,7 +2089,7 @@ fn calculate_vmaf_score(
         if try_cuda && !cuda_failed_once {
             score = run_vmaf_instance(
                 ffmpeg_path, ffprobe_path, reference_path, distorted_path, 
-                &model_path, true, ss, dt, &pids, input_path
+                &model_path, true, ss, dt, &pids, input_path, &config.custom_vmaf_params
             );
             if score.is_some() {
                 used_device = "CUDA".to_string();
@@ -2102,7 +2111,7 @@ fn calculate_vmaf_score(
             
             score = run_vmaf_instance(
                 ffmpeg_path, ffprobe_path, reference_path, distorted_path, 
-                &model_path, false, ss, dt, &pids, input_path
+                &model_path, false, ss, dt, &pids, input_path, &config.custom_vmaf_params
             );
             used_device = "CPU".to_string(); 
         }
@@ -2147,7 +2156,8 @@ fn run_vmaf_instance(
     ss: Option<f64>,
     t: Option<f64>,
     pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
-    input_key: &str
+    input_key: &str,
+    custom_vmaf_params: &[String],
 ) -> Option<f64> {
      // Prepare paths
     let model_esc = escape_path_for_filter(model_path);
@@ -2157,7 +2167,15 @@ fn run_vmaf_instance(
     let log_path = temp_dir.join(format!("vmaf_log_{}.json", id));
     let log_esc = escape_path_for_filter(&log_path.to_string_lossy());
     
-    let vmaf_opts = format!("model='path={}':log_fmt=json:log_path='{}'", model_esc, log_esc);
+    // Build vmaf_opts with custom params
+    let mut vmaf_opts = format!("model='path={}':log_fmt=json:log_path='{}'", model_esc, log_esc);
+    for param in custom_vmaf_params {
+        let trimmed = param.trim();
+        if !trimmed.is_empty() {
+            vmaf_opts.push(':');
+            vmaf_opts.push_str(trimmed);
+        }
+    }
 
     let mut args = Vec::new();
     args.push("-hide_banner".to_string());

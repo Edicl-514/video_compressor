@@ -25,7 +25,7 @@
     });
     let currentView = $state<"basic" | "advanced">("basic");
     let editingTarget = $state<{
-        type: "video" | "audio" | "filters";
+        type: "video" | "audio" | "filters" | "vmafParams";
         index: number;
         title: string;
         params: string[];
@@ -164,15 +164,25 @@
     }
 
     function openParamsEditor(
-        type: "video" | "audio" | "filters",
+        type: "video" | "audio" | "filters" | "vmafParams",
         index: number = 0,
     ) {
         if (type === "filters") {
             editingTarget = {
                 type: "filters",
                 index: 0,
-                title: "Custom Filters",
+                title: "Custom Params",
                 params: config.customFilters,
+            };
+            return;
+        }
+
+        if (type === "vmafParams") {
+            editingTarget = {
+                type: "vmafParams",
+                index: 0,
+                title: "Custom VMAF Params",
+                params: config.customVmafParams,
             };
             return;
         }
@@ -195,6 +205,8 @@
 
         if (editingTarget.type === "filters") {
             config.customFilters = newParams;
+        } else if (editingTarget.type === "vmafParams") {
+            config.customVmafParams = newParams;
         } else if (editingTarget.type === "video") {
             config.availableVideoEncoders[editingTarget.index].customParams =
                 newParams;
@@ -663,27 +675,34 @@
                 {/if}
 
                 <div class="section">
-                    <h3>Custom Filters</h3>
-                    <div class="warning-box">
-                        <label class="checkbox-label">
-                            <input
-                                type="checkbox"
-                                bind:checked={config.enableCustomFiltersEditing}
-                            />
-                            Enable editing (Caution: Invalid filters may cause failure)
-                        </label>
-                    </div>
+                    <h3>Custom Compression Params</h3>
                     <div class="filter-controls">
                         <button
                             class="secondary-btn"
-                            disabled={!config.enableCustomFiltersEditing}
                             onclick={() => openParamsEditor("filters")}
                         >
-                            Edit Filters
+                            Edit Params
                         </button>
                         {#if config.customFilters.length > 0}
                             <span class="badge"
                                 >{config.customFilters.length} active</span
+                            >
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>Custom VMAF Params</h3>
+                    <div class="filter-controls">
+                        <button
+                            class="secondary-btn"
+                            onclick={() => openParamsEditor("vmafParams")}
+                        >
+                            Edit Params
+                        </button>
+                        {#if config.customVmafParams.length > 0}
+                            <span class="badge"
+                                >{config.customVmafParams.length} active</span
                             >
                         {/if}
                     </div>
@@ -914,10 +933,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .warning-box {
-        margin-bottom: 8px;
     }
 
     .vmaf-settings {

@@ -24,10 +24,17 @@
   let showSettings = $state(false);
 
   let processingStats = $derived.by(() => {
-    // Active processing stats
+    // Active processing stats - check for all processing-related statuses
+    const isProcessingStatus = (status: string) =>
+      status === "Processing" ||
+      status === "Processing (Pass 1/2)" ||
+      status === "Processing (Pass 2/2)" ||
+      status.startsWith("Searching CRF") ||
+      status.startsWith("Found CRF");
+
     const processing = files.filter(
       (f) =>
-        f.status === "Processing" &&
+        isProcessingStatus(f.status) &&
         (f.speed !== undefined || f.bitrateKbps !== undefined),
     );
 
