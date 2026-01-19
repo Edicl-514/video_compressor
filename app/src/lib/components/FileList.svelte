@@ -47,6 +47,11 @@
             return "↑" + Math.abs(ratio).toFixed(1) + "%";
         }
     }
+
+    // Check if status text is long enough to need scrolling
+    function isLongStatus(status: string): boolean {
+        return status.length > 16;
+    }
 </script>
 
 <div class="file-list-container">
@@ -58,14 +63,14 @@
         <table class="file-list">
             <thead>
                 <tr>
-                    <th>File Name</th>
-                    <th>Size</th>
-                    <th>Resolution</th>
-                    <th>Bitrate</th>
-                    <th>Encoder</th>
-                    <th>Status</th>
-                    <th>VMAF</th>
-                    <th class="progress-col">Progress</th>
+                    <th class="col-name">File Name</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-resolution">Resolution</th>
+                    <th class="col-bitrate">Bitrate</th>
+                    <th class="col-encoder">Encoder</th>
+                    <th class="col-status">Status</th>
+                    <th class="col-vmaf">VMAF</th>
+                    <th class="col-progress">Progress</th>
                 </tr>
             </thead>
             <tbody>
@@ -74,7 +79,7 @@
                         <td class="col-name" title={file.path}>{file.name}</td>
 
                         <!-- Size -->
-                        <td>
+                        <td class="col-size">
                             {#if file.status === "Done" && file.outputInfo}
                                 <div
                                     class="info-cell"
@@ -102,7 +107,7 @@
                         </td>
 
                         <!-- Resolution -->
-                        <td>
+                        <td class="col-resolution">
                             {#if file.status === "Done" && file.outputInfo}
                                 <div
                                     class="info-cell"
@@ -119,7 +124,7 @@
                         </td>
 
                         <!-- Bitrate -->
-                        <td>
+                        <td class="col-bitrate">
                             {#if file.status === "Done" && file.outputInfo}
                                 <div
                                     class="info-cell"
@@ -136,7 +141,7 @@
                         </td>
 
                         <!-- Encoder -->
-                        <td>
+                        <td class="col-encoder">
                             {#if file.status === "Done" && file.outputInfo}
                                 <div
                                     class="info-cell"
@@ -152,31 +157,43 @@
                             {/if}
                         </td>
 
-                        <td>
-                            <span
-                                class="status-badge"
-                                class:status-scanning={file.status ===
-                                    "Scanning"}
-                                class:status-pending={file.status === "Pending"}
-                                class:status-processing={file.status.startsWith(
-                                    "Processing",
-                                )}
-                                class:status-done={file.status === "Done"}
-                                class:status-error={file.status === "Error"}
-                                class:status-cancelled={file.status ===
-                                    "Cancelled"}
-                                class:status-waiting-for-vmaf={file.status ===
-                                    "Waiting for VMAF"}
-                                class:status-evaluating={file.status ===
-                                    "Evaluating"}
-                            >
-                                {file.status}
-                            </span>
+                        <td class="col-status">
+                            <div class="status-wrapper">
+                                <span
+                                    class="status-badge"
+                                    class:status-scanning={file.status ===
+                                        "Scanning"}
+                                    class:status-pending={file.status ===
+                                        "Pending"}
+                                    class:status-processing={file.status.startsWith(
+                                        "Processing",
+                                    ) || file.status.startsWith("Found CRF")}
+                                    class:status-searching={file.status.startsWith(
+                                        "Searching CRF",
+                                    )}
+                                    class:status-done={file.status === "Done"}
+                                    class:status-error={file.status === "Error"}
+                                    class:status-cancelled={file.status ===
+                                        "Cancelled"}
+                                    class:status-skipped={file.status ===
+                                        "Skipped"}
+                                    class:status-waiting-for-vmaf={file.status ===
+                                        "Waiting for VMAF"}
+                                    class:status-evaluating={file.status ===
+                                        "Evaluating"}
+                                    class:is-long={isLongStatus(file.status)}
+                                    title={file.status}
+                                >
+                                    <span class="status-text"
+                                        >{file.status}</span
+                                    >
+                                </span>
+                            </div>
                         </td>
 
                         <!-- VMAF Score -->
                         <td
-                            class="vmaf-col-cell"
+                            class="col-vmaf"
                             class:clickable={canComputeVmaf(file)}
                             ondblclick={() => triggerVmaf(file)}
                         >
@@ -235,7 +252,7 @@
                             {/if}
                         </td>
 
-                        <td>
+                        <td class="col-progress">
                             <div class="progress-bar">
                                 <div
                                     class="progress-fill"
@@ -277,12 +294,14 @@
         border-collapse: collapse;
         color: #ddd;
         font-size: 0.9rem;
+        table-layout: fixed;
     }
     th,
     td {
         padding: 0.8rem 1rem;
         text-align: left;
         border-bottom: 1px solid #2d2d2d;
+        overflow: hidden;
     }
     th {
         background-color: #252525;
@@ -297,6 +316,7 @@
         background-color: #2a2a2a;
     }
     .col-name {
+        width: auto;
         max-width: 250px;
         white-space: nowrap;
         overflow: hidden;
@@ -304,11 +324,59 @@
         font-weight: 500;
         color: #fff;
     }
-    .progress-col {
-        width: 150px;
+    /* Fixed width columns */
+    .col-size {
+        width: 120px;
+        min-width: 120px;
+        max-width: 120px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .col-resolution {
+        width: 90px;
+        min-width: 90px;
+        max-width: 90px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .col-bitrate {
+        width: 90px;
+        min-width: 90px;
+        max-width: 90px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .col-encoder {
+        width: 80px;
+        min-width: 80px;
+        max-width: 80px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* Status column with marquee scrolling */
+    .col-status {
+        width: 140px;
+        min-width: 140px;
+        max-width: 140px;
+        text-align: center;
+    }
+    .col-vmaf {
+        width: 70px;
+        min-width: 70px;
+        max-width: 70px;
+        text-align: center;
+    }
+    .col-progress {
+        width: 130px;
+        min-width: 130px;
+        max-width: 130px;
+        white-space: nowrap;
     }
     .progress-bar {
-        width: 100%;
         height: 6px;
         background-color: #333;
         border-radius: 3px;
@@ -327,13 +395,46 @@
         font-size: 0.8rem;
         color: #888;
     }
+    .status-wrapper {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
     .status-badge {
+        display: inline-block;
+        max-width: 160px;
         padding: 0.25rem 0.6rem;
         border-radius: 4px;
         font-size: 0.75rem;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+        overflow: hidden;
+    }
+    .status-text {
+        display: inline-block;
+        white-space: nowrap;
+    }
+    /* Apply marquee animation automatically for long status text */
+    .status-badge.is-long .status-text {
+        animation: marquee-scroll 5s ease-in-out infinite;
+    }
+    @keyframes marquee-scroll {
+        0%,
+        15% {
+            transform: translateX(0);
+        }
+        35%,
+        50% {
+            transform: translateX(calc(-100% + 140px));
+        }
+        65%,
+        85% {
+            transform: translateX(0);
+        }
+        100% {
+            transform: translateX(0);
+        }
     }
     .status-scanning {
         background-color: #4b3b00;
@@ -351,6 +452,10 @@
         background-color: #1e3a8a;
         color: #93c5fd;
     }
+    .status-searching {
+        background-color: #134e4a;
+        color: #2dd4bf;
+    }
     .status-done {
         background-color: #14532d;
         color: #86efac;
@@ -358,6 +463,10 @@
     .status-cancelled {
         background-color: #451a03;
         color: #fbbf24;
+    }
+    .status-skipped {
+        background-color: #1e293b;
+        color: #94a3b8;
     }
     .status-waiting-for-vmaf {
         background-color: #1e3a8a;
@@ -368,10 +477,10 @@
         color: #d8b4fe;
     }
 
-    .vmaf-col-cell.clickable {
+    .col-vmaf.clickable {
         cursor: pointer;
     }
-    .vmaf-col-cell.clickable:hover {
+    .col-vmaf.clickable:hover {
         background-color: rgba(100, 108, 255, 0.1);
     }
 

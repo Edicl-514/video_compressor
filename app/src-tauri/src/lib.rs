@@ -34,6 +34,16 @@ async fn scan_directory(path: String) -> Result<video::ScanResult, String> {
 }
 
 #[tauri::command]
+async fn scan_multiple_paths(paths: Vec<String>) -> Result<video::ScanResult, String> {
+    Ok(video::scan_multiple_paths(paths))
+}
+
+#[tauri::command]
+async fn categorize_paths(paths: Vec<String>) -> Result<video::PathCategorization, String> {
+    Ok(video::categorize_paths(paths))
+}
+
+#[tauri::command]
 async fn get_video_metadata(path: String) -> Result<video::VideoInfo, String> {
     // Determine ffprobe path
     let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
@@ -301,7 +311,7 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf])
+        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -1,22 +1,77 @@
 <script lang="ts">
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { createEventDispatcher } from 'svelte';
+  import { open } from "@tauri-apps/plugin-dialog";
+  import { createEventDispatcher } from "svelte";
 
   export let inputPath = "";
   export let outputPath = "";
+  export let disabled = false;
 
   const dispatch = createEventDispatcher();
 
-  async function browseInput() {
+  // Video file extensions for file filter
+  const VIDEO_EXTENSIONS = [
+    "mp4", 
+    "mkv",
+    "avi", 
+    "mov", 
+    "flv", 
+    "wmv", 
+    "webm", 
+    "m4v", 
+    "mpg", 
+    "mpeg", 
+    "3gp", 
+    "ts",
+    "asf", 
+    "rmvb", 
+    "vob",
+    "m2ts",
+    "f4v",
+    "mts",
+    "ogv", 
+    "divx",
+    "xvid",
+    "rm"
+  ];
+
+  async function browseInputFolder() {
+    if (disabled) return;
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Select Input Video Folder"
+        title: "Select Input Video Folder",
       });
-      if (selected && typeof selected === 'string') {
+      if (selected && typeof selected === "string") {
         inputPath = selected;
-        dispatch('inputChange', inputPath);
+        dispatch("inputChange", inputPath);
+      }
+    } catch (e) {
+      console.error("Failed to open dialog", e);
+    }
+  }
+
+  async function browseInputVideos() {
+    if (disabled) return;
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        title: "Select Video Files",
+        filters: [
+          {
+            name: "Video Files",
+            extensions: VIDEO_EXTENSIONS,
+          },
+        ],
+      });
+      if (selected) {
+        // Handle array of paths or single path
+        const paths = Array.isArray(selected) ? selected : [selected];
+        if (paths.length > 0) {
+          // Emit multiple paths - parent component will handle scanning
+          dispatch("inputVideosChange", paths);
+        }
       }
     } catch (e) {
       console.error("Failed to open dialog", e);
@@ -24,15 +79,16 @@
   }
 
   async function browseOutput() {
+    if (disabled) return;
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Select Output Folder"
+        title: "Select Output Folder",
       });
-      if (selected && typeof selected === 'string') {
+      if (selected && typeof selected === "string") {
         outputPath = selected;
-        dispatch('outputChange', outputPath);
+        dispatch("outputChange", outputPath);
       }
     } catch (e) {
       console.error("Failed to open dialog", e);
@@ -44,30 +100,44 @@
   <div class="path-row">
     <label for="input">Input:</label>
     <div class="input-wrapper">
-        <input 
-            id="input" 
-            type="text" 
-            bind:value={inputPath} 
-            placeholder="Select video folder... (or drag & drop)" 
-            on:change={() => dispatch('inputChange', inputPath)}
-        />
-        <!-- Optional: Instruction tooltip or icon could go here -->
+      <input
+        id="input"
+        type="text"
+        bind:value={inputPath}
+        placeholder="Select a video / folder... (or drag & drop)"
+        on:change={() => dispatch("inputChange", inputPath)}
+      />
     </div>
-    <button on:click={browseInput}>Browse</button>
+    <div class="browse-buttons">
+      <button
+        class="browse-btn"
+        on:click={browseInputFolder}
+        {disabled}
+        title="Select folder">📁</button
+      >
+      <button
+        class="browse-btn"
+        on:click={browseInputVideos}
+        {disabled}
+        title="Select video files">🎬</button
+      >
+    </div>
   </div>
-  
+
   <div class="path-row">
     <label for="output">Output:</label>
     <div class="input-wrapper">
-        <input 
-            id="output" 
-            type="text" 
-            bind:value={outputPath} 
-            placeholder="Select output folder..." 
-            on:change={() => dispatch('outputChange', outputPath)}
-        />
+      <input
+        id="output"
+        type="text"
+        bind:value={outputPath}
+        placeholder="Select output folder..."
+        on:change={() => dispatch("outputChange", outputPath)}
+      />
     </div>
-    <button on:click={browseOutput}>Browse</button>
+    <button class="browse-output-btn" on:click={browseOutput} {disabled}
+      >Browse</button
+    >
   </div>
 </div>
 
@@ -94,8 +164,8 @@
     font-size: 0.9rem;
   }
   .input-wrapper {
-      flex: 1;
-      position: relative;
+    flex: 1;
+    position: relative;
   }
   input {
     width: 100%;
@@ -106,7 +176,7 @@
     border-radius: 8px;
     outline: none;
     transition: all 0.2s ease;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-size: 0.85rem;
     box-sizing: border-box;
   }
@@ -132,6 +202,32 @@
     transform: translateY(-1px);
   }
   button:active {
-      transform: translateY(0);
+    transform: translateY(0);
+  }
+  button:disabled {
+    background-color: #2a2a2a;
+    color: #666;
+    cursor: not-allowed;
+    border-color: #444;
+  }
+  button:disabled:hover {
+    transform: none;
+    background-color: #2a2a2a;
+    border-color: #444;
+  }
+  .browse-buttons {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .browse-btn {
+    padding: 0.7rem 0.9rem;
+    font-size: 1rem;
+    min-width: auto;
+  }
+  .browse-output-btn {
+    width: 110px;
+    padding-left: 0;
+    padding-right: 0;
+    text-align: center;
   }
 </style>

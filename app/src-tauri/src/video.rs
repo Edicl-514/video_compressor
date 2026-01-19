@@ -136,7 +136,114 @@ pub struct VmafState {
     pub running_task: Option<String>,
 }
 
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v"];
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v", "mpg", "mpeg", "3gp", "ts","asf", "rmvb", "vob","m2ts","f4v","mts","ogv", "divx","xvid","rm"];
+
+/// Check if a path is a video file based on its extension
+pub fn is_video_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        return VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str());
+    }
+    false
+}
+
+/// Categorize dropped paths into videos and directories
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathCategorization {
+    pub videos: Vec<String>,
+    pub directories: Vec<String>,
+    pub invalid: Vec<String>,
+}
+
+pub fn categorize_paths(paths: Vec<String>) -> PathCategorization {
+    let mut videos = Vec::new();
+    let mut directories = Vec::new();
+    let mut invalid = Vec::new();
+
+    for p in paths {
+        let path = Path::new(&p);
+        if path.is_dir() {
+            directories.push(p);
+        } else if is_video_file(path) {
+            videos.push(p);
+        } else {
+            invalid.push(p);
+        }
+    }
+
+    PathCategorization { videos, directories, invalid }
+}
+
+/// Scan multiple paths (files and directories) for videos
+pub fn scan_multiple_paths(paths: Vec<String>) -> ScanResult {
+    let mut videos = Vec::new();
+    let mut errors = Vec::new();
+
+    for p in paths {
+        let path = Path::new(&p);
+        
+        if path.is_dir() {
+            // Scan directory recursively
+            for entry in WalkDir::new(&p) {
+                match entry {
+                    Ok(entry) => {
+                        let entry_path = entry.path();
+                        if is_video_file(entry_path) {
+                            let size = std::fs::metadata(entry_path).map(|m| m.len()).unwrap_or(0);
+                            videos.push(VideoInfo {
+                                name: entry_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                                path: entry_path.to_string_lossy().to_string(),
+                                size,
+                                resolution: "...".to_string(),
+                                bitrate: "...".to_string(),
+                                encoder: "...".to_string(),
+                                status: "Scanning".to_string(),
+                                progress: 0,
+                                duration_sec: 0.0,
+                                speed: None,
+                                bitrate_kbps: None,
+                                vmaf: None,
+                                vmaf_device: None,
+                                vmaf_detail: None,
+                                vmaf_total_segments: None,
+                                vmaf_model: None,
+                            });
+                        }
+                    }
+                    Err(e) => errors.push(format!("Error walking directory: {}", e)),
+                }
+            }
+        } else if is_video_file(path) {
+            // Single video file
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            videos.push(VideoInfo {
+                name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                path: path.to_string_lossy().to_string(),
+                size,
+                resolution: "...".to_string(),
+                bitrate: "...".to_string(),
+                encoder: "...".to_string(),
+                status: "Scanning".to_string(),
+                progress: 0,
+                duration_sec: 0.0,
+                speed: None,
+                bitrate_kbps: None,
+                vmaf: None,
+                vmaf_device: None,
+                vmaf_detail: None,
+                vmaf_total_segments: None,
+                vmaf_model: None,
+            });
+        } else {
+            errors.push(format!("Invalid path (not a video or directory): {}", p));
+        }
+    }
+
+    ScanResult { videos, errors }
+}
 
 pub fn scan_videos(directory: &str) -> ScanResult {
     let mut videos = Vec::new();

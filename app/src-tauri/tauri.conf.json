@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "app",
-        "width": 1100,
-        "height": 750,
+        "width": 1280,
+        "height": 768,
         "resizable": true,
         "center": true
       }

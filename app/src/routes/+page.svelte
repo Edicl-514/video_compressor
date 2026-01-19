@@ -104,6 +104,21 @@
   let isDragging = $state(false);
   let activeZone = $state<"input" | "output" | "both" | null>(null);
 
+  // Status whitelist for "no active task" - if all files have these statuses, no task is in progress
+  const IDLE_STATUSES = [
+    "pending",
+    "cancelled",
+    "done",
+    "error",
+    "skipped",
+    "scanning",
+  ];
+
+  // Check if any task is currently in progress (any file has a status NOT in the whitelist)
+  let hasActiveTask = $derived.by(() => {
+    return files.some((f) => !IDLE_STATUSES.includes(f.status.toLowerCase()));
+  });
+
   let unlistenProgress: (() => void) | null = null;
 
   async function scanVideos() {
@@ -176,6 +191,192 @@
 
   function handleOutputChange(event: CustomEvent<string>) {
     outputPath = event.detail;
+  }
+
+  function handleInputVideosChange(event: CustomEvent<string[]>) {
+    const paths = event.detail;
+    if (paths && paths.length > 0) {
+      handleMultiDrop(paths, "input");
+    }
+  }
+
+  // Handle dropping multiple folders or video files
+  async function handleMultiDrop(
+    paths: string[],
+    zone: "input" | "output" | "both",
+  ) {
+    if (hasActiveTask) {
+      console.log("Drop rejected: active task in progress");
+      return;
+    }
+
+    // Categorize paths
+    const categorization: any = await invoke("categorize_paths", { paths });
+    console.log("Path categorization:", categorization);
+
+    // If all paths are invalid, do nothing
+    if (
+      categorization.videos.length === 0 &&
+      categorization.directories.length === 0
+    ) {
+      console.warn("No valid videos or directories found in drop");
+      return;
+    }
+
+    // Single folder drop to input - use existing logic
+    if (
+      categorization.directories.length === 1 &&
+      categorization.videos.length === 0 &&
+      zone === "input"
+    ) {
+      inputPath = categorization.directories[0];
+      scanVideos();
+      return;
+    }
+
+    // Single folder drop to output - set output path
+    if (
+      categorization.directories.length === 1 &&
+      categorization.videos.length === 0 &&
+      zone === "output"
+    ) {
+      outputPath = categorization.directories[0];
+      return;
+    }
+
+    // Single folder drop to both - use existing logic
+    if (
+      categorization.directories.length === 1 &&
+      categorization.videos.length === 0 &&
+      zone === "both"
+    ) {
+      inputPath = categorization.directories[0];
+      outputPath = categorization.directories[0];
+      scanVideos();
+      return;
+    }
+
+    // Multiple folders/videos - cannot drop to output only
+    if (zone === "output") {
+      console.warn("Multiple paths cannot be dropped to output-only zone");
+      return;
+    }
+
+    // Single video file handling
+    if (
+      categorization.videos.length === 1 &&
+      categorization.directories.length === 0
+    ) {
+      const videoPath = categorization.videos[0];
+      const separator = videoPath.includes("\\") ? "\\" : "/";
+      const videoDir = videoPath.substring(0, videoPath.lastIndexOf(separator));
+
+      // For multiple paths or videos: scan all paths and add to queue
+      scanCounter++;
+      const currentScanId = scanCounter;
+      isScanning = true;
+
+      try {
+        const result: any = await invoke("scan_multiple_paths", {
+          paths: [videoPath],
+        });
+        const newVideos = result.videos || [];
+
+        if (zone === "both") {
+          // Single video to both: input shows path, output shows parent dir
+          inputPath = videoPath;
+          outputPath = videoDir;
+          // Mark with originalOutputDir for processing
+          for (const video of newVideos) {
+            video.originalOutputDir = videoDir;
+          }
+        } else {
+          // Single video to input: just show the path
+          inputPath = videoPath;
+        }
+
+        files = newVideos;
+        fetchMetadata(currentScanId);
+      } catch (e) {
+        console.error("Failed to scan video:", e);
+      } finally {
+        if (currentScanId === scanCounter) {
+          isScanning = false;
+        }
+      }
+      return;
+    }
+
+    // For multiple paths or videos: scan all paths and add to queue
+    scanCounter++;
+    const currentScanId = scanCounter;
+    isScanning = true;
+
+    try {
+      // Collect all paths to scan
+      const allPaths = [
+        ...categorization.directories,
+        ...categorization.videos,
+      ];
+
+      const result: any = await invoke("scan_multiple_paths", {
+        paths: allPaths,
+      });
+      const newVideos = result.videos || [];
+
+      // Build display message for input path
+      const folderCount = categorization.directories.length;
+      const videoCount = categorization.videos.length;
+      let inputDisplayParts: string[] = [];
+      if (folderCount > 0) {
+        inputDisplayParts.push(
+          `${folderCount} folder${folderCount > 1 ? "s" : ""}`,
+        );
+      }
+      if (videoCount > 0) {
+        inputDisplayParts.push(
+          `${videoCount} video${videoCount > 1 ? "s" : ""}`,
+        );
+      }
+      const inputDisplay = `[Selected: ${inputDisplayParts.join(" + ")}]`;
+
+      if (zone === "both") {
+        // For "both" zone: each video outputs to its original location
+        // We need to mark each video with its original directory as output
+        for (const video of newVideos) {
+          // Store the original directory as the video's intended output location
+          const separator = video.path.includes("\\") ? "\\" : "/";
+          const originalDir = video.path.substring(
+            0,
+            video.path.lastIndexOf(separator),
+          );
+          video.originalOutputDir = originalDir;
+        }
+        inputPath = inputDisplay;
+        outputPath = "[Output to original directories]";
+      } else {
+        // For "input" zone: videos go to the set outputPath (or default location)
+        inputPath = inputDisplay;
+        // Keep existing outputPath if set
+      }
+
+      // Add all found videos to the files list
+      files = newVideos;
+      console.log(`Found ${files.length} videos from ${allPaths.length} paths`);
+
+      // Start fetching metadata
+      fetchMetadata(currentScanId);
+
+      if (result.errors && result.errors.length > 0) {
+        console.warn("Scan errors:", result.errors);
+      }
+    } catch (e) {
+      console.error("Failed to scan multiple paths:", e);
+    } finally {
+      if (currentScanId === scanCounter) {
+        isScanning = false;
+      }
+    }
   }
 
   // --- Drag and Drop Logic ---
@@ -333,6 +534,12 @@
 
       const u = await getCurrentWindow().onDragDropEvent((event) => {
         if (event.payload.type === "enter" || event.payload.type === "over") {
+          // Block dragging if there's an active task
+          if (hasActiveTask) {
+            isDragging = false;
+            return;
+          }
+
           isDragging = true;
 
           const payload = event.payload as any;
@@ -346,22 +553,20 @@
             updateActiveZoneFromPoint(logicalX, logicalY);
           }
         } else if (event.payload.type === "drop") {
+          // Block dropping if there's an active task
+          if (hasActiveTask) {
+            console.log("Drop blocked: active task in progress");
+            isDragging = false;
+            activeZone = null;
+            return;
+          }
+
           console.log("File drop detected!", event.payload.paths);
           const paths = event.payload.paths;
 
-          if (paths && paths.length > 0) {
-            const path = paths[0];
-
-            if (activeZone === "input") {
-              inputPath = path;
-              scanVideos();
-            } else if (activeZone === "output") {
-              outputPath = path;
-            } else if (activeZone === "both") {
-              inputPath = path;
-              outputPath = path;
-              scanVideos();
-            }
+          if (paths && paths.length > 0 && activeZone) {
+            // Use the new multi-drop handler for all cases
+            handleMultiDrop(paths, activeZone);
           }
 
           isDragging = false;
@@ -560,12 +765,23 @@
         const file = files[i];
 
         // Prepare output path
+        // Check if video has originalOutputDir set (from multi-drop to "both" zone)
+        const effectiveOutputPath =
+          (file as any).originalOutputDir || outputPath;
+        const effectiveInputRoot =
+          (file as any).originalOutputDir ||
+          inputPath ||
+          file.path.substring(
+            0,
+            file.path.lastIndexOf(file.path.includes("\\") ? "\\" : "/"),
+          );
+
         const outPath = getOutputFilePath(
           file.path,
-          outputPath,
+          effectiveOutputPath,
           settings.targetFormat,
           settings.suffix,
-          inputPath,
+          effectiveInputRoot,
         );
 
         // Update status to Processing
@@ -652,16 +868,14 @@
 </script>
 
 <main class="container">
-  <div class="header">
-    <h1>Video Compressor</h1>
-  </div>
-
   <section class="path-section">
     <PathSelector
       bind:inputPath
       bind:outputPath
+      disabled={hasActiveTask}
       on:inputChange={handleInputChange}
       on:outputChange={handleOutputChange}
+      on:inputVideosChange={handleInputVideosChange}
     />
   </section>
 
@@ -757,7 +971,7 @@
     padding: 1.5rem;
     gap: 1.5rem;
     box-sizing: border-box;
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     position: relative;
   }

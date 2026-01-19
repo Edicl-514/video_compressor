@@ -4,6 +4,7 @@
         CompressionMode,
         type AppSettings,
         type EncoderConfig,
+        DEFAULT_SETTINGS,
     } from "../types";
     import { invoke } from "@tauri-apps/api/core";
     import ParamsEditorModal from "./ParamsEditorModal.svelte";
@@ -293,6 +294,11 @@
             encoderValue.toLowerCase().includes(w.toLowerCase()),
         );
     }
+
+    function resetToDefaults() {
+        config = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+        showNotification("Settings reset to defaults");
+    }
 </script>
 
 <div
@@ -399,8 +405,21 @@
                                     <span
                                         class="tooltip"
                                         title="Skip processing if input video bitrate is lower than this value"
-                                        >ℹ️</span
                                     >
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2.5"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        >
+                                            <circle cx="12" cy="12" r="10"
+                                            ></circle>
+                                            <path d="M12 16v-4"></path>
+                                            <path d="M12 8h.01"></path>
+                                        </svg>
+                                    </span>
                                 </label>
                                 <input
                                     type="number"
@@ -421,8 +440,21 @@
                                     <span
                                         class="tooltip"
                                         title="Runs encoding twice for better quality distribution at the target bitrate. Slower but higher quality."
-                                        >ℹ️</span
                                     >
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2.5"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        >
+                                            <circle cx="12" cy="12" r="10"
+                                            ></circle>
+                                            <path d="M12 16v-4"></path>
+                                            <path d="M12 8h.01"></path>
+                                        </svg>
+                                    </span>
                                 </label>
                             </div>
                         {:else if config.compressionMode === CompressionMode.CRF}
@@ -436,8 +468,21 @@
                                     <span
                                         class="tooltip"
                                         title="Stops processing early if detected output bitrate is significantly higher than original"
-                                        >ℹ️</span
                                     >
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2.5"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        >
+                                            <circle cx="12" cy="12" r="10"
+                                            ></circle>
+                                            <path d="M12 16v-4"></path>
+                                            <path d="M12 8h.01"></path>
+                                        </svg>
+                                    </span>
                                 </label>
                             </div>
                             {#if config.crfAutoSkip}
@@ -450,8 +495,21 @@
                                         <span
                                             class="tooltip"
                                             title="Skip if output bitrate > input bitrate * threshold / 100"
-                                            >ℹ️</span
                                         >
+                                            <svg
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                stroke-width="2.5"
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                            >
+                                                <circle cx="12" cy="12" r="10"
+                                                ></circle>
+                                                <path d="M12 16v-4"></path>
+                                                <path d="M12 8h.01"></path>
+                                            </svg>
+                                        </span>
                                     </label>
                                     <input
                                         type="number"
@@ -694,8 +752,20 @@
                             <span
                                 class="tooltip"
                                 title="When unchecked, only commonly used encoders are shown"
-                                >ℹ️</span
                             >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 16v-4"></path>
+                                    <path d="M12 8h.01"></path>
+                                </svg>
+                            </span>
                         </label>
                         <label class="checkbox-label">
                             <input
@@ -706,8 +776,20 @@
                             <span
                                 class="tooltip"
                                 title="Only show GPU/hardware encoders like NVENC, AMF, QSV"
-                                >ℹ️</span
                             >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 16v-4"></path>
+                                    <path d="M12 8h.01"></path>
+                                </svg>
+                            </span>
                         </label>
                     </div>
 
@@ -813,6 +895,15 @@
                             >
                         {/if}
                     </div>
+                </div>
+
+                <div class="section">
+                    <button
+                        class="secondary-btn reset-btn"
+                        onclick={resetToDefaults}
+                    >
+                        🔄 Reset to Default Settings
+                    </button>
                 </div>
             {/if}
         </div>
@@ -952,6 +1043,7 @@
         gap: 8px;
         cursor: pointer;
         color: #eee;
+        margin-top: 0px;
     }
 
     .row {
@@ -1205,7 +1297,7 @@
 
     .mode-extra-settings {
         margin-top: 10px;
-        border-top: 1px solid #333;
+        border-bottom: 3px solid #333;
         padding-top: 10px;
     }
 
@@ -1213,12 +1305,31 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
+        margin-bottom: 15px;
     }
 
     .tooltip {
         cursor: help;
-        font-size: 0.8rem;
-        opacity: 0.7;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        color: #646cff;
+        opacity: 0.6;
+        transition: all 0.2s;
+        vertical-align: middle;
+        margin-left: 4px;
+    }
+
+    .tooltip:hover {
+        opacity: 1;
+        transform: scale(1.15);
+    }
+
+    .tooltip svg {
+        width: 100%;
+        height: 100%;
     }
 
     .form-group-row {
@@ -1227,5 +1338,18 @@
     }
     .form-group-row .form-group {
         flex: 1;
+    }
+
+    .reset-btn {
+        width: 100%;
+        color: #ff9999;
+        border-color: rgba(255, 153, 153, 0.3);
+        margin-top: 8px;
+    }
+
+    .reset-btn:hover {
+        border-color: rgba(255, 153, 153, 0.6);
+        color: #ffb3b3;
+        background: rgba(255, 153, 153, 0.1);
     }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import "../app.css";
     import { settingsStore } from "$lib/stores/settings.svelte";
     import { browser } from "$app/environment";
 

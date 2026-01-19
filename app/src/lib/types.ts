@@ -24,6 +24,7 @@ export interface VideoInfo {
     vmafTotalSegments?: number;
     vmafModel?: string;
     vmafSearchEndProgress?: number; // Progress when VMAF search ended (for smooth progress)
+    originalOutputDir?: string; // For multi-drop mode: output to original directory
 }
 
 // VMAF CRF search progress event payload
@@ -109,11 +110,11 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
     compressionMode: CompressionMode.CRF,
-    targetBitrate: 2000,
-    targetCRF: 23,
-    targetVMAF: 93,
-    ffmpegThreads: 2,
-    ffprobeThreads: 4, // More parallel checks
+    targetBitrate: 8000,
+    targetCRF: 22,
+    targetVMAF: 97,
+    ffmpegThreads: 1,
+    ffprobeThreads: 8, // More parallel checks
     maxResolution: {
         enabled: false,
         width: 1920,
@@ -123,18 +124,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
     audioEncoder: 'aac',
     targetFormat: 'mp4',
     availableVideoEncoders: [
-        { name: 'libx264 (CPU)', value: 'libx264', visible: true, isSupported: true, customParams: [] },
-        { name: 'libx265 (CPU)', value: 'libx265', visible: true, isSupported: true, customParams: [] },
-        { name: 'libsvtav1 (CPU)', value: 'libsvtav1', visible: true, isSupported: true, customParams: [] },
-        { name: 'h264_nvenc (HW)', value: 'h264_nvenc', visible: true, isSupported: true, customParams: [] },
-        { name: 'hevc_nvenc (HW)', value: 'hevc_nvenc', visible: true, isSupported: true, customParams: [] },
+        { name: 'libx264 (CPU)', value: 'libx264', visible: true, isSupported: true, customParams: ['-preset medium', '-profile:v high'] },
+        { name: 'libx265 (CPU)', value: 'libx265', visible: true, isSupported: true, customParams: ['-preset medium', '-tag:v hvc1'] },
+        { name: 'libsvtav1 (CPU)', value: 'libsvtav1', visible: true, isSupported: true, customParams: ['-preset 8', '-svtav1-params tune=0'] },
+        { name: 'h264_nvenc (HW)', value: 'h264_nvenc', visible: true, isSupported: true, customParams: ['-preset p4'] },
+        { name: 'hevc_nvenc (HW)', value: 'hevc_nvenc', visible: true, isSupported: true, customParams: ['-preset p4', '-tag:v hvc1'] },
+        { name: 'av1_nvenc (HW)', value: 'av1_nvenc', visible: true, isSupported: true, customParams: ['-preset p4', '-tune hq'] },
     ],
     availableAudioEncoders: [
-        { name: 'aac (CPU)', value: 'aac', visible: true, isSupported: true, customParams: [] },
-        { name: 'libmp3lame (CPU)', value: 'libmp3lame', visible: true, isSupported: true, customParams: [] },
-        { name: 'libopus (CPU)', value: 'libopus', visible: true, isSupported: true, customParams: [] },
+        { name: 'aac (CPU)', value: 'aac', visible: true, isSupported: true, customParams: ['-b:a 192k'] },
+        { name: 'libmp3lame (CPU)', value: 'libmp3lame', visible: true, isSupported: true, customParams: ['-ac 2'] },
+        { name: 'libopus (CPU)', value: 'libopus', visible: true, isSupported: true, customParams: ['-b:a 128k', '-vbr on'] },
     ],
-    customFilters: [],
+    customFilters: ['-pix_fmt yuv420p', '-map_metadata 0', '-movflags +faststart'],
     customVmafParams: ['n_subsample=5'],
 
     suffix: '_compressed',
@@ -146,10 +148,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // VMAF Settings
     enableVmaf: false,
     vmafFullComputation: false, // Option 2: Full computation (Slow)
-    vmafSegmentCount: 10,        // Option 3: Number of segments (if not full)
-    vmafSegmentDuration: 5,     // Option 3: Duration per segment (if not full)
+    vmafSegmentCount: 4,        // Option 3: Number of segments (if not full)
+    vmafSegmentDuration: 10,     // Option 3: Duration per segment (if not full)
     vmafAutoConfig: true,       // Option 3: Auto set segments/duration
-    vmafUseCuda: false,          // Option 4: Experimental CUDA
+    vmafUseCuda: true,          // Option 4: Experimental CUDA
     vmafNeg: false,
 
     // Encoder filter settings
