@@ -8,6 +8,7 @@
     } from "../types";
     import { invoke } from "@tauri-apps/api/core";
     import ParamsEditorModal from "./ParamsEditorModal.svelte";
+    import EncoderDetectionModal from "./EncoderDetectionModal.svelte";
     import LanguageSwitcher from "./LanguageSwitcher.svelte";
     import { _ as t } from "svelte-i18n";
 
@@ -34,6 +35,7 @@
         params: string[];
     } | null>(null);
     let isDetecting = $state<boolean>(false);
+    let showDetectionModal = $state<boolean>(false);
     let notification = $state<{
         message: string;
         type: "success" | "error";
@@ -54,108 +56,102 @@
         close();
     }
 
-    async function detectEncoders() {
-        console.log("Detecting encoders...");
-        isDetecting = true;
-        try {
-            const report: any = await invoke("detect_encoders");
-            console.log("Detected:", report);
+    function detectEncoders() {
+        showDetectionModal = true;
+    }
 
-            // Reset visibility and supported status for all encoders first
-            config.availableVideoEncoders.forEach((e) => {
-                e.visible = false;
-                e.isSupported = false;
-            });
-            config.availableAudioEncoders.forEach((e) => {
-                e.visible = false;
-                e.isSupported = false;
-            });
+    function handleDetectionComplete(report: any) {
+        showDetectionModal = false;
+        applyDetectionReport(report);
+    }
 
-            let addedVideo = 0;
-            let addedAudio = 0;
+    function applyDetectionReport(report: any) {
+        console.log("Detection complete:", report);
+        
+        // Reset visibility and supported status for all encoders first
+        config.availableVideoEncoders.forEach((e) => {
+            e.visible = false;
+            e.isSupported = false;
+        });
+        config.availableAudioEncoders.forEach((e) => {
+            e.visible = false;
+            e.isSupported = false;
+        });
 
-            // Update Video Encoders
-            for (const detected of report.video) {
-                const existingIndex = config.availableVideoEncoders.findIndex(
-                    (e) => e.value === detected.value,
-                );
-                if (existingIndex >= 0) {
-                    config.availableVideoEncoders[existingIndex].visible = true;
-                    config.availableVideoEncoders[existingIndex].isSupported =
-                        true;
-                    // Force update name to ensure consistency (e.g. migrating from old names)
-                    config.availableVideoEncoders[existingIndex].name =
-                        detected.name;
-                } else {
-                    config.availableVideoEncoders.push({
-                        name: detected.name,
-                        value: detected.value,
-                        visible: true,
-                        isSupported: true,
-                        customParams: [],
-                    });
-                    addedVideo++;
-                }
-            }
+        let addedVideo = 0;
+        let addedAudio = 0;
 
-            // Update Audio Encoders
-            for (const detected of report.audio) {
-                const existingIndex = config.availableAudioEncoders.findIndex(
-                    (e) => e.value === detected.value,
-                );
-                if (existingIndex >= 0) {
-                    config.availableAudioEncoders[existingIndex].visible = true;
-                    config.availableAudioEncoders[existingIndex].isSupported =
-                        true;
-                    config.availableAudioEncoders[existingIndex].name =
-                        detected.name;
-                } else {
-                    config.availableAudioEncoders.push({
-                        name: detected.name,
-                        value: detected.value,
-                        visible: true,
-                        isSupported: true,
-                        customParams: [],
-                    });
-                    addedAudio++;
-                }
-            }
-
-            // Ensure selected encoder is valid
-            const currentVideo = config.availableVideoEncoders.find(
-                (e) => e.value === config.videoEncoder,
+        // Update Video Encoders
+        for (const detected of report.video) {
+            const existingIndex = config.availableVideoEncoders.findIndex(
+                (e) => e.value === detected.value,
             );
-            if (!currentVideo || !currentVideo.visible) {
-                const firstVisible = config.availableVideoEncoders.find(
-                    (e) => e.visible,
-                );
-                if (firstVisible) config.videoEncoder = firstVisible.value;
+            if (existingIndex >= 0) {
+                config.availableVideoEncoders[existingIndex].visible = true;
+                config.availableVideoEncoders[existingIndex].isSupported = true;
+                config.availableVideoEncoders[existingIndex].name = detected.name;
+            } else {
+                config.availableVideoEncoders.push({
+                    name: detected.name,
+                    value: detected.value,
+                    visible: true,
+                    isSupported: true,
+                    customParams: [],
+                });
+                addedVideo++;
             }
-
-            const currentAudio = config.availableAudioEncoders.find(
-                (e) => e.value === config.audioEncoder,
-            );
-            if (!currentAudio || !currentAudio.visible) {
-                const firstVisible = config.availableAudioEncoders.find(
-                    (e) => e.visible,
-                );
-                if (firstVisible) config.audioEncoder = firstVisible.value;
-            }
-
-            showNotification(
-                $t("common.detection_complete", {
-                    values: {
-                        video_count: report.video.length,
-                        audio_count: report.audio.length,
-                    },
-                }),
-            );
-        } catch (e) {
-            console.error(e);
-            showNotification("Failed to detect encoders: " + e, "error");
-        } finally {
-            isDetecting = false;
         }
+
+        // Update Audio Encoders
+        for (const detected of report.audio) {
+            const existingIndex = config.availableAudioEncoders.findIndex(
+                (e) => e.value === detected.value,
+            );
+            if (existingIndex >= 0) {
+                config.availableAudioEncoders[existingIndex].visible = true;
+                config.availableAudioEncoders[existingIndex].isSupported = true;
+                config.availableAudioEncoders[existingIndex].name = detected.name;
+            } else {
+                config.availableAudioEncoders.push({
+                    name: detected.name,
+                    value: detected.value,
+                    visible: true,
+                    isSupported: true,
+                    customParams: [],
+                });
+                addedAudio++;
+            }
+        }
+
+        // Ensure selected encoder is valid
+        const currentVideo = config.availableVideoEncoders.find(
+            (e) => e.value === config.videoEncoder,
+        );
+        if (!currentVideo || !currentVideo.visible) {
+            const firstVisible = config.availableVideoEncoders.find(
+                (e) => e.visible,
+            );
+            if (firstVisible) config.videoEncoder = firstVisible.value;
+        }
+
+        const currentAudio = config.availableAudioEncoders.find(
+            (e) => e.value === config.audioEncoder,
+        );
+        if (!currentAudio || !currentAudio.visible) {
+            const firstVisible = config.availableAudioEncoders.find(
+                (e) => e.visible,
+            );
+            if (firstVisible) config.audioEncoder = firstVisible.value;
+        }
+
+        showNotification(
+            $t("common.detection_complete", {
+                values: {
+                    video_count: report.video.length,
+                    audio_count: report.audio.length,
+                },
+            }),
+        );
     }
 
     function toggleResolutionLimit(e: Event) {
@@ -362,7 +358,7 @@
                                 disabled={config.maxResolution.enabled}
                                 >{$t("common.target_vmaf")}
                                 {config.maxResolution.enabled
-                                    ? "(Disabled by Resolution Limit)"
+                                    ? $t("common.disabled_by_resolution_limit")
                                     : ""}</option
                             >
                         </select>
@@ -658,7 +654,7 @@
                         type="text"
                         id="output-suffix"
                         bind:value={config.suffix}
-                        placeholder="_compressed (leave empty to overwrite)"
+                        placeholder={$t("common.suffix_hint")}
                     />
                     <small
                         style="color: #666; font-size: 0.8rem; margin-top: 4px;"
@@ -681,7 +677,9 @@
                                 {$t("common.auto_calculate_vmaf_score")}
                                 {#if config.maxResolution.enabled}
                                     <span class="warning-text"
-                                        >(Disabled by Resolution Limit)</span
+                                        >{$t(
+                                            "common.disabled_by_resolution_limit",
+                                        )}</span
                                     >
                                 {/if}
                             </label>
@@ -779,13 +777,8 @@
                         <button
                             class="secondary-btn"
                             onclick={detectEncoders}
-                            disabled={isDetecting}
                         >
-                            {#if isDetecting}
-                                {$t("common.scanning")}
-                            {:else}
-                                {$t("common.detect_encoders")}
-                            {/if}
+                            {$t("common.detect_encoders")}
                         </button>
                     </div>
 
@@ -910,6 +903,12 @@
                         initialParams={editingTarget.params}
                         close={() => (editingTarget = null)}
                         save={saveParams}
+                    />
+                {/if}
+
+                {#if showDetectionModal}
+                    <EncoderDetectionModal
+                        onComplete={handleDetectionComplete}
                     />
                 {/if}
 

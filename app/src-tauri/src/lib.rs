@@ -62,7 +62,7 @@ async fn get_video_metadata(path: String) -> Result<video::VideoInfo, String> {
 }
 
 #[tauri::command]
-async fn detect_encoders() -> Result<video::DetectionReport, String> {
+async fn detect_encoders(app: AppHandle) -> Result<video::DetectionReport, String> {
     let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
     let ffmpeg_path = if ffmpeg_rel.exists() {
          std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
@@ -81,7 +81,7 @@ async fn detect_encoders() -> Result<video::DetectionReport, String> {
         "ffmpeg".to_string()
     };
 
-    Ok(video::detect_system_encoders(&path_str))
+    Ok(video::detect_system_encoders(&path_str, app))
 }
 
 #[tauri::command]

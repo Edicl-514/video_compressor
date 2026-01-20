@@ -98,7 +98,13 @@
         "progress": "Progress",
         "output_not_set_title": "Output Path Not Set",
         "output_not_set_message": "Please set the output folder path first.",
+        "detecting_encoders_title": "Detecting Encoders",
+        "encoder_available": "Available",
+        "encoder_unavailable": "Unavailable",
+        "detection_finished": "Detection Finished",
+        "close": "Close",
         "overwrite_warning_title": "Overwrite Warning",
-        "overwrite_warning_message": "The source files will be overwritten. Continue?"
+        "overwrite_warning_message": "The source files will be overwritten. Continue?",
+        "disabled_by_resolution_limit": "Disabled by Resolution Limit"
     }
 }

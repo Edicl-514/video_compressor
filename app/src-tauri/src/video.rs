@@ -286,7 +286,15 @@ pub fn scan_videos(directory: &str) -> ScanResult {
     ScanResult { videos, errors }
 }
 
-pub fn detect_system_encoders(ffmpeg_path: &str) -> DetectionReport {
+#[derive(Debug, Serialize, Clone)]
+pub struct DetectionProgress {
+    pub r#type: String,
+    pub name: String,
+    pub value: String,
+    pub available: bool,
+}
+
+pub fn detect_system_encoders(ffmpeg_path: &str, app: AppHandle) -> DetectionReport {
     let mut report = DetectionReport {
         video: Vec::new(),
         audio: Vec::new(),
@@ -336,17 +344,27 @@ pub fn detect_system_encoders(ffmpeg_path: &str) -> DetectionReport {
             "-c:v", &name, "-f", "null", "-"
         ];
         
-        match Command::new(ffmpeg_path).args(&args).output() {
+        let available = match Command::new(ffmpeg_path).args(&args).output() {
             Ok(o) if o.status.success() => {
+                let display_name = if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) };
                 report.video.push(DetectedEncoder {
-                    name: if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) },
-                    value: name,
+                    name: display_name.clone(),
+                    value: name.clone(),
                     is_hardware: is_hw,
-                    description: desc,
+                    description: desc.clone(),
                 });
+                true
             },
-            _ => {}
-        }
+            _ => false
+        };
+
+        // 发送进度事件
+        let _ = app.emit("encoder-detection-progress", DetectionProgress {
+            r#type: "video".to_string(),
+            name: if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) },
+            value: name,
+            available,
+        });
     }
 
     // 3. Filter & Test Audio
@@ -357,17 +375,26 @@ pub fn detect_system_encoders(ffmpeg_path: &str) -> DetectionReport {
             "-t", "1", "-c:a", &name, "-f", "null", "-"
         ];
 
-        match Command::new(ffmpeg_path).args(&args).output() {
+        let available = match Command::new(ffmpeg_path).args(&args).output() {
             Ok(o) if o.status.success() => {
                 report.audio.push(DetectedEncoder {
                     name: format!("{} (CPU)", name),
-                    value: name,
+                    value: name.clone(),
                     is_hardware: false,
-                    description: desc,
+                    description: desc.clone(),
                 });
+                true
             },
-            _ => {}
-        }
+            _ => false
+        };
+
+        // 发送进度事件
+        let _ = app.emit("encoder-detection-progress", DetectionProgress {
+            r#type: "audio".to_string(),
+            name: format!("{} (CPU)", name),
+            value: name,
+            available,
+        });
     }
 
     report

@@ -98,7 +98,13 @@
         "progress": "进度",
         "output_not_set_title": "输出路径未设置",
         "output_not_set_message": "请先设置输出文件夹路径。",
+        "detecting_encoders_title": "正在检测编码器",
+        "encoder_available": "可用",
+        "encoder_unavailable": "不可用",
+        "detection_finished": "检测完成",
+        "close": "关闭",
         "overwrite_warning_title": "覆盖警告",
-        "overwrite_warning_message": "源文件将被覆盖。是否继续？"
+        "overwrite_warning_message": "源文件将被覆盖。是否继续？",
+        "disabled_by_resolution_limit": "(限制分辨率时无法使用)"
     }
 }
