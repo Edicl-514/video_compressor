@@ -12,6 +12,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { VideoInfo } from "$lib/types";
   import { settingsStore } from "$lib/stores/settings.svelte";
+  import { sortStore } from "$lib/stores/sortStore.svelte";
   import { t } from "svelte-i18n";
 
   let inputPath = $state("");
@@ -790,9 +791,54 @@
     isPaused = false;
     shouldStop = false;
 
-    // Queue of indices to process
-    const queue = files
-      .map((f, i) => ({ f, i }))
+    // Helper functions for sorting (same as FileList.svelte)
+    function parseResolution(res: string): number {
+      const parts = res.split("x").map(Number);
+      if (parts.length !== 2) return 0;
+      const pixels = parts[0] * parts[1];
+      return isNaN(pixels) ? 0 : pixels;
+    }
+
+    function parseBitrate(bitrate: string): number {
+      // Only use the static bitrate string from initial scan
+      // Don't use bitrateKbps which changes during processing
+      const match = bitrate.match(/(\d+)/);
+      return match ? parseInt(match[1], 10) : 0;
+    }
+
+    // Create items with original indices
+    let itemsWithIndices = files.map((f, i) => ({ f, i }));
+
+    // Apply sorting if a sort column is set
+    if (sortStore.column) {
+      itemsWithIndices.sort((a, b) => {
+        let result = 0;
+        switch (sortStore.column) {
+          case "name":
+            result = a.f.name.localeCompare(b.f.name, undefined, {
+              numeric: true,
+            });
+            break;
+          case "size":
+            result = a.f.size - b.f.size;
+            break;
+          case "resolution":
+            result =
+              parseResolution(a.f.resolution) - parseResolution(b.f.resolution);
+            break;
+          case "bitrate":
+            result = parseBitrate(a.f.bitrate) - parseBitrate(b.f.bitrate);
+            break;
+          case "encoder":
+            result = a.f.encoder.localeCompare(b.f.encoder);
+            break;
+        }
+        return sortStore.direction === "asc" ? result : -result;
+      });
+    }
+
+    // Queue of indices to process (now in sorted order)
+    const queue = itemsWithIndices
       .filter((item) => item.f.status !== "Done" && item.f.status !== "Error")
       .map((item) => item.i);
 

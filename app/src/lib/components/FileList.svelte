@@ -4,7 +4,59 @@
     import { settingsStore } from "$lib/stores/settings.svelte";
     import { t } from "svelte-i18n";
 
-    export let files: VideoInfo[] = [];
+    let { files = [] } = $props<{ files: VideoInfo[] }>();
+
+    import { sortStore, type SortColumn } from "$lib/stores/sortStore.svelte";
+
+    function parseResolution(res: string): number {
+        const parts = res.split("x").map(Number);
+        if (parts.length !== 2) return 0;
+        const pixels = parts[0] * parts[1];
+        return isNaN(pixels) ? 0 : pixels;
+    }
+
+    function parseBitrate(bitrate: string): number {
+        // Only use the static bitrate string from initial scan
+        // Don't use bitrateKbps which changes during processing
+        const match = bitrate.match(/(\d+)/);
+        return match ? parseInt(match[1], 10) : 0;
+    }
+
+    let sortedFiles = $derived.by(() => {
+        const sorted = [...files];
+        if (!sortStore.column) return sorted;
+
+        sorted.sort((a, b) => {
+            let result = 0;
+            switch (sortStore.column) {
+                case "name":
+                    result = a.name.localeCompare(b.name, undefined, {
+                        numeric: true,
+                    });
+                    break;
+                case "size":
+                    result = a.size - b.size;
+                    break;
+                case "resolution":
+                    result =
+                        parseResolution(a.resolution) -
+                        parseResolution(b.resolution);
+                    break;
+                case "bitrate":
+                    result = parseBitrate(a.bitrate) - parseBitrate(b.bitrate);
+                    break;
+                case "encoder":
+                    result = a.encoder.localeCompare(b.encoder);
+                    break;
+            }
+            return sortStore.direction === "asc" ? result : -result;
+        });
+        return sorted;
+    });
+
+    function toggleSort(column: SortColumn) {
+        sortStore.toggleSort(column);
+    }
 
     function canComputeVmaf(file: VideoInfo): boolean {
         return (
@@ -64,18 +116,78 @@
         <table class="file-list">
             <thead>
                 <tr>
-                    <th class="col-name">{$t("common.file_name")}</th>
-                    <th class="col-size">{$t("common.file_size")}</th>
-                    <th class="col-resolution">{$t("common.resolution")}</th>
-                    <th class="col-bitrate">{$t("common.bitrate")}</th>
-                    <th class="col-encoder">{$t("common.encoder")}</th>
+                    <th
+                        class="col-name sortable"
+                        onclick={() => toggleSort("name")}
+                    >
+                        {$t("common.file_name")}
+                        {#if sortStore.column === "name"}
+                            <span class="sort-indicator"
+                                >{sortStore.direction === "asc"
+                                    ? "▲"
+                                    : "▼"}</span
+                            >
+                        {/if}
+                    </th>
+                    <th
+                        class="col-size sortable"
+                        onclick={() => toggleSort("size")}
+                    >
+                        {$t("common.file_size")}
+                        {#if sortStore.column === "size"}
+                            <span class="sort-indicator"
+                                >{sortStore.direction === "asc"
+                                    ? "▲"
+                                    : "▼"}</span
+                            >
+                        {/if}
+                    </th>
+                    <th
+                        class="col-resolution sortable"
+                        onclick={() => toggleSort("resolution")}
+                    >
+                        {$t("common.resolution")}
+                        {#if sortStore.column === "resolution"}
+                            <span class="sort-indicator"
+                                >{sortStore.direction === "asc"
+                                    ? "▲"
+                                    : "▼"}</span
+                            >
+                        {/if}
+                    </th>
+                    <th
+                        class="col-bitrate sortable"
+                        onclick={() => toggleSort("bitrate")}
+                    >
+                        {$t("common.bitrate")}
+                        {#if sortStore.column === "bitrate"}
+                            <span class="sort-indicator"
+                                >{sortStore.direction === "asc"
+                                    ? "▲"
+                                    : "▼"}</span
+                            >
+                        {/if}
+                    </th>
+                    <th
+                        class="col-encoder sortable"
+                        onclick={() => toggleSort("encoder")}
+                    >
+                        {$t("common.encoder")}
+                        {#if sortStore.column === "encoder"}
+                            <span class="sort-indicator"
+                                >{sortStore.direction === "asc"
+                                    ? "▲"
+                                    : "▼"}</span
+                            >
+                        {/if}
+                    </th>
                     <th class="col-status">{$t("common.status")}</th>
                     <th class="col-vmaf">{$t("common.vmaf_score")}</th>
                     <th class="col-progress">{$t("common.progress")}</th>
                 </tr>
             </thead>
             <tbody>
-                {#each files as file}
+                {#each sortedFiles as file}
                     <tr>
                         <td class="col-name" title={file.path}>{file.name}</td>
 
@@ -231,7 +343,7 @@
                                         class:low-score={file.vmaf < 80}
                                         title={file.vmafDetail &&
                                         file.vmafDetail.length > 0
-                                            ? `Avg: ${file.vmaf.toFixed(2)}\nSegments:\n${file.vmafDetail.map((s, i) => `#${i + 1}: ${s.toFixed(2)}`).join("\n")}`
+                                            ? `Avg: ${file.vmaf.toFixed(2)}\nSegments:\n${file.vmafDetail.map((s: number, i: number) => `#${i + 1}: ${s.toFixed(2)}`).join("\n")}`
                                             : undefined}
                                     >
                                         {file.vmaf.toFixed(2)}
@@ -312,6 +424,21 @@
         color: #aaa;
         z-index: 10;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+    th.sortable {
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.2s;
+    }
+    th.sortable:hover {
+        background-color: #333;
+    }
+    .sort-indicator {
+        display: inline-block;
+        margin-left: 4px;
+        font-size: 0.7em;
+        vertical-align: middle;
+        color: #888;
     }
     tr:hover {
         background-color: #2a2a2a;
