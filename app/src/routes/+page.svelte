@@ -12,6 +12,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { VideoInfo } from "$lib/types";
   import { settingsStore } from "$lib/stores/settings.svelte";
+  import { t } from "svelte-i18n";
 
   let inputPath = $state("");
   let outputPath = $state("");
@@ -186,6 +187,7 @@
 
   function handleInputChange(event: CustomEvent<string>) {
     inputPath = event.detail;
+    outputPath = ""; // Reset output path when input changes
     scanVideos();
   }
 
@@ -196,6 +198,7 @@
   function handleInputVideosChange(event: CustomEvent<string[]>) {
     const paths = event.detail;
     if (paths && paths.length > 0) {
+      outputPath = ""; // Reset output path when input videos are selected
       handleMultiDrop(paths, "input");
     }
   }
@@ -230,6 +233,7 @@
       zone === "input"
     ) {
       inputPath = categorization.directories[0];
+      outputPath = ""; // Reset output path when input folder is selected
       scanVideos();
       return;
     }
@@ -293,6 +297,7 @@
         } else {
           // Single video to input: just show the path
           inputPath = videoPath;
+          outputPath = ""; // Reset output path when input video is selected
         }
 
         files = newVideos;
@@ -330,15 +335,17 @@
       let inputDisplayParts: string[] = [];
       if (folderCount > 0) {
         inputDisplayParts.push(
-          `${folderCount} folder${folderCount > 1 ? "s" : ""}`,
+          $t("common.folder_count", { values: { count: folderCount } }),
         );
       }
       if (videoCount > 0) {
         inputDisplayParts.push(
-          `${videoCount} video${videoCount > 1 ? "s" : ""}`,
+          $t("common.video_count", { values: { count: videoCount } }),
         );
       }
-      const inputDisplay = `[Selected: ${inputDisplayParts.join(" + ")}]`;
+      const inputDisplay = $t("common.selected_display", {
+        values: { parts: inputDisplayParts.join(" + ") },
+      });
 
       if (zone === "both") {
         // For "both" zone: each video outputs to its original location
@@ -353,11 +360,11 @@
           video.originalOutputDir = originalDir;
         }
         inputPath = inputDisplay;
-        outputPath = "[Output to original directories]";
+        outputPath = $t("common.output_to_original_directories");
       } else {
         // For "input" zone: videos go to the set outputPath (or default location)
         inputPath = inputDisplay;
-        // Keep existing outputPath if set
+        outputPath = ""; // Reset output path when input videos/folders are selected
       }
 
       // Add all found videos to the files list
@@ -721,23 +728,59 @@
 
     const settings = settingsStore.value;
 
-    // Overwrite Check
-    let effectiveOut = outputPath;
-    if (!effectiveOut && inputPath) {
-      effectiveOut = inputPath;
+    // Check if output path is set (but not the special translation text for originalOutputDir)
+    if (!outputPath || outputPath.trim() === "") {
+      await ask($t("common.output_not_set_message"), {
+        title: $t("common.output_not_set_title"),
+        kind: "warning",
+      });
+      return;
     }
 
-    const sameDir = normalizePath(effectiveOut) === normalizePath(inputPath);
+    // Overwrite Check
     const emptySuffix = !settings.suffix;
 
-    if (sameDir && emptySuffix) {
-      const confirmed = await ask(
-        "The source files will be overwritten. Continue?",
-        {
-          title: "Overwrite Warning",
-          kind: "warning",
-        },
-      );
+    // Check if any video would be overwritten
+    // A video will be overwritten if:
+    // 1. No suffix is set, AND
+    // 2. Output format same as input format (or format unchanged), AND
+    // 3. The video's output directory is the same as its source directory
+    let willOverwrite = false;
+
+    if (emptySuffix) {
+      for (const file of pendingFiles) {
+        // Get the video's source directory
+        const separator = file.path.includes("\\") ? "\\" : "/";
+        const sourceDir = file.path.substring(
+          0,
+          file.path.lastIndexOf(separator),
+        );
+
+        // Get the effective output directory for this file
+        const effectiveOutputDir =
+          (file as any).originalOutputDir || outputPath;
+
+        // Compare directories
+        if (normalizePath(sourceDir) === normalizePath(effectiveOutputDir)) {
+          // Also check if input extension matches output format
+          const inputExt = file.path
+            .substring(file.path.lastIndexOf(".") + 1)
+            .toLowerCase();
+          const outputExt = settings.targetFormat.toLowerCase();
+
+          if (inputExt === outputExt) {
+            willOverwrite = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (willOverwrite) {
+      const confirmed = await ask($t("common.overwrite_warning_message"), {
+        title: $t("common.overwrite_warning_title"),
+        kind: "warning",
+      });
 
       if (!confirmed) return;
     }
@@ -913,7 +956,7 @@
       >
         <div class="zone-content">
           <span class="icon">📂</span>
-          <span>Set Input Folder</span>
+          <span>{$t("common.as_input_folder")}</span>
         </div>
       </div>
 
@@ -926,7 +969,7 @@
       >
         <div class="zone-content">
           <span class="icon">✨</span>
-          <span>Set Both (Input & Output)</span>
+          <span>{$t("common.as_both_folders")}</span>
         </div>
       </div>
 
@@ -939,7 +982,7 @@
       >
         <div class="zone-content">
           <span class="icon">💾</span>
-          <span>Set Output Folder</span>
+          <span>{$t("common.as_output_folder")}</span>
         </div>
       </div>
     </div>

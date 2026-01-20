@@ -6,32 +6,34 @@
   export let outputPath = "";
   export let disabled = false;
 
+  import { _ as t } from "svelte-i18n";
+
   const dispatch = createEventDispatcher();
 
   // Video file extensions for file filter
   const VIDEO_EXTENSIONS = [
-    "mp4", 
+    "mp4",
     "mkv",
-    "avi", 
-    "mov", 
-    "flv", 
-    "wmv", 
-    "webm", 
-    "m4v", 
-    "mpg", 
-    "mpeg", 
-    "3gp", 
+    "avi",
+    "mov",
+    "flv",
+    "wmv",
+    "webm",
+    "m4v",
+    "mpg",
+    "mpeg",
+    "3gp",
     "ts",
-    "asf", 
-    "rmvb", 
+    "asf",
+    "rmvb",
     "vob",
     "m2ts",
     "f4v",
     "mts",
-    "ogv", 
+    "ogv",
     "divx",
     "xvid",
-    "rm"
+    "rm",
   ];
 
   async function browseInputFolder() {
@@ -98,13 +100,15 @@
 
 <div class="path-selector">
   <div class="path-row">
-    <label for="input">Input:</label>
+    <div class="path-row-label">
+      <label for="input">{$t("common.input_path")}:</label>
+    </div>
     <div class="input-wrapper">
       <input
         id="input"
         type="text"
         bind:value={inputPath}
-        placeholder="Select a video / folder... (or drag & drop)"
+        placeholder={$t("common.input_place_holder")}
         on:change={() => dispatch("inputChange", inputPath)}
       />
     </div>
@@ -113,30 +117,32 @@
         class="browse-btn"
         on:click={browseInputFolder}
         {disabled}
-        title="Select folder">📁</button
+        title={$t("common.select_folder")}>📁</button
       >
       <button
         class="browse-btn"
         on:click={browseInputVideos}
         {disabled}
-        title="Select video files">🎬</button
+        title={$t("common.select_video_files")}>🎬</button
       >
     </div>
   </div>
 
   <div class="path-row">
-    <label for="output">Output:</label>
+    <div class="path-row-label">
+      <label for="output">{$t("common.output_path")}:</label>
+    </div>
     <div class="input-wrapper">
       <input
         id="output"
         type="text"
         bind:value={outputPath}
-        placeholder="Select output folder..."
+        placeholder={$t("common.output_place_holder")}
         on:change={() => dispatch("outputChange", outputPath)}
       />
     </div>
     <button class="browse-output-btn" on:click={browseOutput} {disabled}
-      >Browse</button
+      >{$t("common.browse")}</button
     >
   </div>
 </div>
@@ -156,6 +162,10 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+  .path-row-label {
+    width: auto;
+    text-align: right;
   }
   label {
     width: 60px;

@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { t } from "svelte-i18n";
+
     // Make this component generic, so it can be used for encoders or generic filters
     let { title, initialParams, close, save } = $props<{
         title: string;
@@ -71,17 +73,19 @@
 
         <div class="content">
             <p class="description">
-                Add custom parameters. One parameter per line.
+                {$t("common.custom_params_hint")}
             </p>
 
             <div class="param-input">
                 <input
                     type="text"
-                    placeholder="Enter parameter"
+                    placeholder={$t("common.custom_params_placeholder")}
                     bind:value={newParam}
                     onkeydown={(e) => e.key === "Enter" && addParam()}
                 />
-                <button class="add-btn" onclick={addParam}>Add</button>
+                <button class="add-btn" onclick={addParam}
+                    >{$t("common.add")}</button
+                >
             </div>
 
             <ul class="param-list">
@@ -107,15 +111,19 @@
                     </li>
                 {/each}
                 {#if params.length === 0}
-                    <li class="empty">No parameters set</li>
+                    <li class="empty">{$t("common.no_params")}</li>
                 {/if}
             </ul>
         </div>
 
         <footer>
             <div class="spacer"></div>
-            <button class="secondary-btn" onclick={close}>Cancel</button>
-            <button class="primary-btn" onclick={handleSave}>Confirm</button>
+            <button class="secondary-btn" onclick={close}
+                >{$t("common.cancel")}</button
+            >
+            <button class="primary-btn" onclick={handleSave}
+                >{$t("common.confirm")}</button
+            >
         </footer>
     </div>
 </div>

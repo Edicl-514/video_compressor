@@ -9,6 +9,7 @@
 <script lang="ts">
     import { listen } from "@tauri-apps/api/event";
     import { onMount } from "svelte";
+    import { t } from "svelte-i18n";
 
     let {
         processingSpeed = 0,
@@ -82,7 +83,7 @@
         <div class="row stats-row">
             {#if processingSpeed > 0}
                 <div class="info-item min-fit">
-                    <span class="label">Speed</span>
+                    <span class="label">{$t("common.speed")}</span>
                     <span class="value speed-value"
                         >{processingSpeed.toFixed(2)}x</span
                     >
@@ -95,7 +96,7 @@
 
             {#if processingBitrate > 0}
                 <div class="info-item min-fit">
-                    <span class="label">Bitrate</span>
+                    <span class="label">{$t("common.bitrate")}</span>
                     <span class="value bitrate-value"
                         >{processingBitrate.toFixed(1)}k</span
                     >
@@ -108,7 +109,7 @@
 
             {#if totalProgress > 0}
                 <div class="info-item min-fit progress-item">
-                    <span class="label">Total</span>
+                    <span class="label">{$t("common.total")}</span>
                     <div class="meter-container">
                         <div
                             class="meter-bar"

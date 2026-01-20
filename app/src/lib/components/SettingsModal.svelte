@@ -8,22 +8,24 @@
     } from "../types";
     import { invoke } from "@tauri-apps/api/core";
     import ParamsEditorModal from "./ParamsEditorModal.svelte";
+    import LanguageSwitcher from "./LanguageSwitcher.svelte";
+    import { _ as t } from "svelte-i18n";
 
     let { close } = $props<{ close: () => void }>();
 
-    let config = $state<AppSettings>(
-        JSON.parse(JSON.stringify(settingsStore.value)),
-    );
+    const initialData = JSON.parse(JSON.stringify(settingsStore.value));
 
     // Safety initialization for existing encoders
-    config.availableVideoEncoders.forEach((e) => {
+    initialData.availableVideoEncoders.forEach((e: any) => {
         if (!e.customParams) e.customParams = [];
         if (e.isSupported === undefined) e.isSupported = true;
     });
-    config.availableAudioEncoders.forEach((e) => {
+    initialData.availableAudioEncoders.forEach((e: any) => {
         if (!e.customParams) e.customParams = [];
         if (e.isSupported === undefined) e.isSupported = true;
     });
+
+    let config = $state<AppSettings>(initialData);
     let currentView = $state<"basic" | "advanced">("basic");
     let editingTarget = $state<{
         type: "video" | "audio" | "filters" | "vmafParams";
@@ -141,7 +143,12 @@
             }
 
             showNotification(
-                `Detection complete. Enabled ${report.video.length} video encoders and ${report.audio.length} audio encoders.`,
+                $t("common.detection_complete", {
+                    values: {
+                        video_count: report.video.length,
+                        audio_count: report.audio.length,
+                    },
+                }),
             );
         } catch (e) {
             console.error(e);
@@ -172,7 +179,7 @@
             editingTarget = {
                 type: "filters",
                 index: 0,
-                title: "Custom Params",
+                title: $t("common.custom_params"),
                 params: config.customFilters,
             };
             return;
@@ -182,7 +189,7 @@
             editingTarget = {
                 type: "vmafParams",
                 index: 0,
-                title: "Custom VMAF Params",
+                title: $t("common.custom_vmaf_params"),
                 params: config.customVmafParams,
             };
             return;
@@ -196,7 +203,9 @@
         editingTarget = {
             type,
             index,
-            title: `Edit Parameters: ${list[index].name}`,
+            title: $t("common.edit_params_encoder", {
+                values: { name: list[index].name },
+            }),
             params: list[index].customParams,
         };
     }
@@ -297,7 +306,7 @@
 
     function resetToDefaults() {
         config = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
-        showNotification("Settings reset to defaults");
+        showNotification($t("common.settings_reset"));
     }
 </script>
 
@@ -318,7 +327,9 @@
     >
         <header>
             <h2>
-                {currentView === "basic" ? "Settings" : "Advanced Settings"}
+                {currentView === "basic"
+                    ? $t("common.settings")
+                    : $t("common.advanced_settings")}
             </h2>
             <button class="close-btn" onclick={close}>&times;</button>
         </header>
@@ -326,7 +337,14 @@
         <div class="content">
             {#if currentView === "basic"}
                 <div class="form-group">
-                    <label for="compression-mode">Compression Mode</label>
+                    <label for="language-switcher">Language / 语言</label>
+                    <LanguageSwitcher />
+                </div>
+
+                <div class="form-group">
+                    <label for="compression-mode"
+                        >{$t("common.compression_mode")}</label
+                    >
                     <div class="mode-select-row">
                         <select
                             id="compression-mode"
@@ -334,15 +352,16 @@
                             class="compression-select"
                         >
                             <option value={CompressionMode.BITRATE}
-                                >Target Bitrate</option
+                                >{$t("common.target_bitrate")}</option
                             >
                             <option value={CompressionMode.CRF}
-                                >Target CRF (Quality)</option
+                                >{$t("common.target_crf")}</option
                             >
                             <option
                                 value={CompressionMode.VMAF}
                                 disabled={config.maxResolution.enabled}
-                                >Target VMAF {config.maxResolution.enabled
+                                >{$t("common.target_vmaf")}
+                                {config.maxResolution.enabled
                                     ? "(Disabled by Resolution Limit)"
                                     : ""}</option
                             >
@@ -357,7 +376,9 @@
                     <!-- Dynamic Input for Selected Mode -->
                     <div class="mode-value-input">
                         {#if config.compressionMode === CompressionMode.BITRATE}
-                            <label for="target-bitrate">Bitrate (kbps)</label>
+                            <label for="target-bitrate"
+                                >{$t("common.bitrate_kbps")}</label
+                            >
                             <input
                                 id="target-bitrate"
                                 type="number"
@@ -366,7 +387,9 @@
                                 step="100"
                             />
                         {:else if config.compressionMode === CompressionMode.CRF}
-                            <label for="target-crf">CRF Value (0-51)</label>
+                            <label for="target-crf"
+                                >{$t("common.target_crf")}</label
+                            >
                             <div class="slider-row">
                                 <input
                                     type="range"
@@ -386,7 +409,9 @@
                                 />
                             </div>
                         {:else if config.compressionMode === CompressionMode.VMAF}
-                            <label for="target-vmaf">Target VMAF (0-100)</label>
+                            <label for="target-vmaf"
+                                >{$t("common.target_vmaf_0_100")}</label
+                            >
                             <input
                                 id="target-vmaf"
                                 type="number"
@@ -401,10 +426,12 @@
                         {#if config.compressionMode === CompressionMode.BITRATE}
                             <div class="extra-setting">
                                 <label for="bypass-threshold">
-                                    Bypass Threshold (kbps)
+                                    {$t("common.bypass_threshold_kbps")}
                                     <span
                                         class="tooltip"
-                                        title="Skip processing if input video bitrate is lower than this value"
+                                        title={$t(
+                                            "common.bypass_threshold_hint",
+                                        )}
                                     >
                                         <svg
                                             viewBox="0 0 24 24"
@@ -427,7 +454,9 @@
                                     bind:value={config.minBitrateThreshold}
                                     min="0"
                                     step="100"
-                                    placeholder="0 (Disabled)"
+                                    placeholder={$t(
+                                        "common.bypass_threshold_hint",
+                                    )}
                                 />
                             </div>
                             <div class="extra-setting">
@@ -436,10 +465,10 @@
                                         type="checkbox"
                                         bind:checked={config.twoPass}
                                     />
-                                    Enable 2-Pass Encoding
+                                    {$t("common.enable_2_pass")}
                                     <span
                                         class="tooltip"
-                                        title="Runs encoding twice for better quality distribution at the target bitrate. Slower but higher quality."
+                                        title={$t("common.2pass_hint")}
                                     >
                                         <svg
                                             viewBox="0 0 24 24"
@@ -464,10 +493,10 @@
                                         type="checkbox"
                                         bind:checked={config.crfAutoSkip}
                                     />
-                                    Auto-skip if output larger than input
+                                    {$t("common.crf_auto_skip")}
                                     <span
                                         class="tooltip"
-                                        title="Stops processing early if detected output bitrate is significantly higher than original"
+                                        title={$t("common.crf_auto_skip_hint")}
                                     >
                                         <svg
                                             viewBox="0 0 24 24"
@@ -491,10 +520,12 @@
                                     style="margin-top: 8px;"
                                 >
                                     <label for="crf-threshold">
-                                        Skip Threshold (%)
+                                        {$t("common.crf_skip_threshold")}
                                         <span
                                             class="tooltip"
-                                            title="Skip if output bitrate > input bitrate * threshold / 100"
+                                            title={$t(
+                                                "common.crf_skip_threshold_hint",
+                                            )}
                                         >
                                             <svg
                                                 viewBox="0 0 24 24"
@@ -527,7 +558,9 @@
 
                 <div class="form-group-row">
                     <div class="form-group">
-                        <label for="ffmpeg-threads">FFmpeg Tasks</label>
+                        <label for="ffmpeg-threads"
+                            >{$t("common.ffmpeg_tasks")}</label
+                        >
                         <input
                             type="number"
                             id="ffmpeg-threads"
@@ -537,7 +570,9 @@
                         />
                     </div>
                     <div class="form-group">
-                        <label for="ffprobe-threads">FFprobe Tasks</label>
+                        <label for="ffprobe-threads"
+                            >{$t("common.ffprobe_tasks")}</label
+                        >
                         <input
                             type="number"
                             id="ffprobe-threads"
@@ -549,7 +584,9 @@
                 </div>
 
                 <div class="form-group">
-                    <span class="group-label">Max Resolution</span>
+                    <span class="group-label"
+                        >{$t("common.max_resolution")}</span
+                    >
                     <div class="row">
                         <label class="checkbox-label">
                             <input
@@ -557,7 +594,7 @@
                                 checked={config.maxResolution.enabled}
                                 onchange={toggleResolutionLimit}
                             />
-                            Limit Resolution
+                            {$t("common.limit_resolution")}
                         </label>
                     </div>
                     {#if config.maxResolution.enabled}
@@ -578,7 +615,9 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="video-encoder">Video Encoder</label>
+                    <label for="video-encoder"
+                        >{$t("common.video_encoder")}</label
+                    >
                     <select id="video-encoder" bind:value={config.videoEncoder}>
                         {#each config.availableVideoEncoders as enc}
                             {#if enc.visible && shouldShowVideoEncoder(enc.value)}
@@ -589,7 +628,9 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="audio-encoder">Audio Encoder</label>
+                    <label for="audio-encoder"
+                        >{$t("common.audio_encoder")}</label
+                    >
                     <select id="audio-encoder" bind:value={config.audioEncoder}>
                         {#each config.availableAudioEncoders as enc}
                             {#if enc.visible && shouldShowAudioEncoder(enc.value)}
@@ -600,7 +641,9 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="target-format">Target Format</label>
+                    <label for="target-format"
+                        >{$t("common.target_format")}</label
+                    >
                     <select id="target-format" bind:value={config.targetFormat}>
                         <option value="mp4">MP4</option>
                         <option value="mkv">MKV</option>
@@ -610,7 +653,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="output-suffix">Output Filename Suffix</label>
+                    <label for="output-suffix">{$t("common.suffix")}</label>
                     <input
                         type="text"
                         id="output-suffix"
@@ -620,13 +663,12 @@
                     <small
                         style="color: #666; font-size: 0.8rem; margin-top: 4px;"
                     >
-                        If empty and input/output folders are the same, original
-                        files will be overwritten.
+                        {$t("common.suffix_hint")}
                     </small>
                 </div>
 
                 <div class="form-group">
-                    <span class="group-label">VMAF Configuration</span>
+                    <span class="group-label">{$t("common.vmaf_config")}</span>
 
                     <div class="vmaf-settings">
                         <div class="row">
@@ -636,7 +678,7 @@
                                     bind:checked={config.enableVmaf}
                                     disabled={config.maxResolution.enabled}
                                 />
-                                Auto calculate VMAF score after compression
+                                {$t("common.auto_calculate_vmaf_score")}
                                 {#if config.maxResolution.enabled}
                                     <span class="warning-text"
                                         >(Disabled by Resolution Limit)</span
@@ -660,7 +702,7 @@
                                     type="checkbox"
                                     bind:checked={config.vmafFullComputation}
                                 />
-                                Full Video Calculation (Sluggish)
+                                {$t("common.vmaf_full_computation")}
                             </label>
                         </div>
 
@@ -671,7 +713,7 @@
                                         type="checkbox"
                                         bind:checked={config.vmafAutoConfig}
                                     />
-                                    Auto Configure Segments
+                                    {$t("common.vmaf_auto_config")}
                                 </label>
                             </div>
                             <div
@@ -679,7 +721,11 @@
                                 class:disabled={config.vmafAutoConfig}
                             >
                                 <div class="sub-input">
-                                    <label for="vmaf-seg-count">Segments</label>
+                                    <label for="vmaf-seg-count"
+                                        >{$t(
+                                            "common.vmaf_segment_count",
+                                        )}</label
+                                    >
                                     <input
                                         type="number"
                                         id="vmaf-seg-count"
@@ -690,7 +736,9 @@
                                 </div>
                                 <div class="sub-input">
                                     <label for="vmaf-seg-dur"
-                                        >Duration (s)</label
+                                        >{$t(
+                                            "common.vmaf_segment_duration",
+                                        )}</label
                                     >
                                     <input
                                         type="number"
@@ -709,7 +757,7 @@
                                     type="checkbox"
                                     bind:checked={config.vmafUseCuda}
                                 />
-                                Use CUDA Acceleration (Experimental)
+                                {$t("common.vmaf_use_cuda")}
                             </label>
                         </div>
                         <div class="row" style="margin-top: 8px;">
@@ -718,7 +766,7 @@
                                     type="checkbox"
                                     bind:checked={config.vmafNeg}
                                 />
-                                Anti-filter/Sharpening
+                                {$t("common.vmaf_neg")}
                             </label>
                         </div>
                     </div>
@@ -727,16 +775,16 @@
                 <!-- ADVANCED VIEW -->
                 <div class="section">
                     <div class="section-header">
-                        <h3>Encoder Management</h3>
+                        <h3>{$t("common.encoder_management")}</h3>
                         <button
                             class="secondary-btn"
                             onclick={detectEncoders}
                             disabled={isDetecting}
                         >
                             {#if isDetecting}
-                                Scanning...
+                                {$t("common.scanning")}
                             {:else}
-                                Detect Encoders
+                                {$t("common.detect_encoders")}
                             {/if}
                         </button>
                     </div>
@@ -748,10 +796,10 @@
                                 type="checkbox"
                                 bind:checked={config.showAllEncoders}
                             />
-                            Show All Available Encoders
+                            {$t("common.show_all_encoders")}
                             <span
                                 class="tooltip"
-                                title="When unchecked, only commonly used encoders are shown"
+                                title={$t("common.show_all_encoders_hint")}
                             >
                                 <svg
                                     viewBox="0 0 24 24"
@@ -772,10 +820,10 @@
                                 type="checkbox"
                                 bind:checked={config.showOnlyHwEncoders}
                             />
-                            Only Show Hardware-Accelerated Video Encoders
+                            {$t("common.show_only_hw_encoders")}
                             <span
                                 class="tooltip"
-                                title="Only show GPU/hardware encoders like NVENC, AMF, QSV"
+                                title={$t("common.show_only_hw_encoders_hint")}
                             >
                                 <svg
                                     viewBox="0 0 24 24"
@@ -794,7 +842,7 @@
                     </div>
 
                     <div class="encoder-list">
-                        <h4>Video Encoders</h4>
+                        <h4>{$t("common.video_encoders")}</h4>
                         {#each config.availableVideoEncoders as enc, i}
                             {#if enc.isSupported && shouldShowVideoEncoder(enc.value)}
                                 <div class="encoder-row">
@@ -808,7 +856,8 @@
                                     <div class="encoder-actions">
                                         {#if enc.customParams?.length > 0}
                                             <span class="badge small"
-                                                >{enc.customParams.length} active</span
+                                                >{enc.customParams.length}
+                                                {$t("common.activated")}</span
                                             >
                                         {/if}
                                         <button
@@ -816,14 +865,14 @@
                                             onclick={() =>
                                                 openParamsEditor("video", i)}
                                         >
-                                            Edit Params
+                                            {$t("common.edit_params")}
                                         </button>
                                     </div>
                                 </div>
                             {/if}
                         {/each}
 
-                        <h4>Audio Encoders</h4>
+                        <h4>{$t("common.audio_encoders")}</h4>
                         {#each config.availableAudioEncoders as enc, i}
                             {#if enc.isSupported && shouldShowAudioEncoder(enc.value)}
                                 <div class="encoder-row">
@@ -837,7 +886,8 @@
                                     <div class="encoder-actions">
                                         {#if enc.customParams?.length > 0}
                                             <span class="badge small"
-                                                >{enc.customParams.length} active</span
+                                                >{enc.customParams.length}
+                                                {$t("common.activated")}</span
                                             >
                                         {/if}
                                         <button
@@ -845,7 +895,7 @@
                                             onclick={() =>
                                                 openParamsEditor("audio", i)}
                                         >
-                                            Edit Params
+                                            {$t("common.edit_params")}
                                         </button>
                                     </div>
                                 </div>
@@ -864,34 +914,36 @@
                 {/if}
 
                 <div class="section">
-                    <h3>Custom Compression Params</h3>
+                    <h3>{$t("common.custom_compression_params")}</h3>
                     <div class="filter-controls">
                         <button
                             class="secondary-btn"
                             onclick={() => openParamsEditor("filters")}
                         >
-                            Edit Params
+                            {$t("common.edit_params")}
                         </button>
                         {#if config.customFilters.length > 0}
                             <span class="badge"
-                                >{config.customFilters.length} active</span
+                                >{config.customFilters.length}
+                                {$t("common.activated")}</span
                             >
                         {/if}
                     </div>
                 </div>
 
                 <div class="section">
-                    <h3>Custom VMAF Params</h3>
+                    <h3>{$t("common.custom_vmaf_params")}</h3>
                     <div class="filter-controls">
                         <button
                             class="secondary-btn"
                             onclick={() => openParamsEditor("vmafParams")}
                         >
-                            Edit Params
+                            {$t("common.edit_params")}
                         </button>
                         {#if config.customVmafParams.length > 0}
                             <span class="badge"
-                                >{config.customVmafParams.length} active</span
+                                >{config.customVmafParams.length}
+                                {$t("common.activated")}</span
                             >
                         {/if}
                     </div>
@@ -902,7 +954,7 @@
                         class="secondary-btn reset-btn"
                         onclick={resetToDefaults}
                     >
-                        🔄 Reset to Default Settings
+                        {$t("common.reset_to_default")}
                     </button>
                 </div>
             {/if}
@@ -913,18 +965,22 @@
                 <button
                     class="secondary-btn"
                     onclick={() => (currentView = "advanced")}
-                    >Advanced Settings</button
+                    >{$t("common.advanced_settings")}</button
                 >
             {:else}
                 <button
                     class="secondary-btn"
                     onclick={() => (currentView = "basic")}
-                    >Back to Basics</button
+                    >{$t("common.back_to_basics")}</button
                 >
             {/if}
             <div class="spacer"></div>
-            <button class="secondary-btn" onclick={close}>Cancel</button>
-            <button class="primary-btn" onclick={save}>Save Changes</button>
+            <button class="secondary-btn" onclick={close}
+                >{$t("common.cancel")}</button
+            >
+            <button class="primary-btn" onclick={save}
+                >{$t("common.save")}</button
+            >
         </footer>
 
         {#if notification}

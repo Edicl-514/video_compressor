@@ -2,6 +2,7 @@
     import type { VideoInfo } from "$lib/types";
     import { invoke } from "@tauri-apps/api/core";
     import { settingsStore } from "$lib/stores/settings.svelte";
+    import { t } from "svelte-i18n";
 
     export let files: VideoInfo[] = [];
 
@@ -57,20 +58,20 @@
 <div class="file-list-container">
     {#if files.length === 0}
         <div class="empty-state">
-            <p>No video files found. Select a folder to scan.</p>
+            <p>{$t("common.no_video_files")}</p>
         </div>
     {:else}
         <table class="file-list">
             <thead>
                 <tr>
-                    <th class="col-name">File Name</th>
-                    <th class="col-size">Size</th>
-                    <th class="col-resolution">Resolution</th>
-                    <th class="col-bitrate">Bitrate</th>
-                    <th class="col-encoder">Encoder</th>
-                    <th class="col-status">Status</th>
-                    <th class="col-vmaf">VMAF</th>
-                    <th class="col-progress">Progress</th>
+                    <th class="col-name">{$t("common.file_name")}</th>
+                    <th class="col-size">{$t("common.file_size")}</th>
+                    <th class="col-resolution">{$t("common.resolution")}</th>
+                    <th class="col-bitrate">{$t("common.bitrate")}</th>
+                    <th class="col-encoder">{$t("common.encoder")}</th>
+                    <th class="col-status">{$t("common.status")}</th>
+                    <th class="col-vmaf">{$t("common.vmaf_score")}</th>
+                    <th class="col-progress">{$t("common.progress")}</th>
                 </tr>
             </thead>
             <tbody>

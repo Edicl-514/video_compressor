@@ -1,5 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte";
+    import { _ as t } from "svelte-i18n";
     const dispatch = createEventDispatcher();
 
     export let isProcessing = false;
@@ -10,15 +11,15 @@
     <div class="main-actions">
         {#if !isProcessing || isPaused}
             <button class="btn btn-primary" on:click={() => dispatch("start")}
-                >{isPaused ? "Resume" : "Start"}</button
+                >{isPaused ? $t("common.resume") : $t("common.start")}</button
             >
         {:else}
             <button class="btn btn-secondary" on:click={() => dispatch("pause")}
-                >Pause</button
+                >{$t("common.pause")}</button
             >
         {/if}
         <button class="btn btn-danger" on:click={() => dispatch("cancel")}
-            >Cancel</button
+            >{$t("common.cancel")}</button
         >
     </div>
 
@@ -26,7 +27,7 @@
         <button
             class="btn btn-icon"
             on:click={() => dispatch("settings")}
-            title="Settings"
+            title={$t("common.settings")}
         >
             ⚙️
         </button>

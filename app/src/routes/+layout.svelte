@@ -1,5 +1,7 @@
 <script lang="ts">
     import "../app.css";
+    import "$lib/i18n"; // Import to initialize i18n
+    import { waitLocale } from "svelte-i18n";
     import { settingsStore } from "$lib/stores/settings.svelte";
     import { browser } from "$app/environment";
 
@@ -19,7 +21,11 @@
     // But since this is a Tauri app (SPA mode usually), it's fine.
 </script>
 
-{@render children()}
+{#await waitLocale()}
+    <!-- Loading translations... -->
+{:then}
+    {@render children()}
+{/await}
 
 <style>
     /* Global styles can go here if not in app.css */
