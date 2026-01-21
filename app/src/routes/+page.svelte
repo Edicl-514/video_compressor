@@ -857,9 +857,18 @@
         // Check if video has originalOutputDir set (from multi-drop to "both" zone)
         const effectiveOutputPath =
           (file as any).originalOutputDir || outputPath;
+
+        // Check if inputPath is an actual path or a display string (like "Selected: X video")
+        // A valid path starts with a drive letter (Windows) or slash (Unix/UNC)
+        const isInputPathValidPath =
+          inputPath &&
+          (/^[a-zA-Z]:/.test(inputPath) ||
+            inputPath.startsWith("/") ||
+            inputPath.startsWith("\\"));
+
         const effectiveInputRoot =
           (file as any).originalOutputDir ||
-          inputPath ||
+          (isInputPathValidPath ? inputPath : null) ||
           file.path.substring(
             0,
             file.path.lastIndexOf(file.path.includes("\\") ? "\\" : "/"),

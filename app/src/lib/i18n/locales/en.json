@@ -25,6 +25,8 @@
         "target_bitrate": "Target Bitrate",
         "target_crf": "Target CRF (Quality)",
         "target_vmaf": "Target VMAF",
+        "copy_mode": "Stream Copy (No Re-encode)",
+        "copy_mode_hint": "Copy streams directly, for remuxing or applying custom params (e.g. -movflags +faststart)",
         "video_encoder": "Video Encoder",
         "audio_encoder": "Audio Encoder",
         "target_format": "Target Format",
@@ -105,6 +107,8 @@
         "close": "Close",
         "overwrite_warning_title": "Overwrite Warning",
         "overwrite_warning_message": "The source files will be overwritten. Continue?",
-        "disabled_by_resolution_limit": "Disabled by Resolution Limit"
+        "disabled_by_resolution_limit": "Disabled by Resolution Limit",
+        "vmaf_search_optimization": "Enable Search Optimization Algorithm",
+        "vmaf_search_optimization_warning": "⚠️ Only enable for videos with identical source and quality. Improves speed but may introduce inaccuracy. May have adverse effects if enabled indiscriminately."
     }
 }

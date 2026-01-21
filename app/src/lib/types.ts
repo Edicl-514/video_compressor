@@ -2,7 +2,8 @@
 export enum CompressionMode {
     BITRATE = 'bitrate',
     CRF = 'crf',
-    VMAF = 'vmaf'
+    VMAF = 'vmaf',
+    COPY = 'copy'
 }
 
 export interface VideoInfo {
@@ -106,6 +107,9 @@ export interface AppSettings {
     // Encoder filter settings
     showAllEncoders: boolean; // Show all available encoders without filtering
     showOnlyHwEncoders: boolean; // Only show hardware-accelerated video encoders
+
+    // VMAF search optimization
+    vmafSearchOptimization: boolean; // Enable Bayesian optimization for VMAF CRF search
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -156,5 +160,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
     // Encoder filter settings
     showAllEncoders: false,
-    showOnlyHwEncoders: false
+    showOnlyHwEncoders: false,
+
+    // VMAF search optimization
+    vmafSearchOptimization: false
 };

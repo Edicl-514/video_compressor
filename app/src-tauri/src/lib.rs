@@ -256,6 +256,7 @@ pub fn run() {
                 vmaf_state: Arc::new(Mutex::new(video::VmafState {
                     queue: std::collections::VecDeque::new(),
                     running_task: None,
+                    crf_history: Vec::new(),
                 })),
             });
 

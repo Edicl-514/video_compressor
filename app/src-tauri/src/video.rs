@@ -115,6 +115,9 @@ pub struct CompressionConfig {
     pub vmaf_neg: bool,
     #[serde(default)]
     pub custom_vmaf_params: Vec<String>,
+    #[serde(default)]
+    #[serde(rename = "vmafSearchOptimization")]
+    pub vmaf_search_optimization: bool,
 }
 
 pub struct VmafTask {
@@ -134,6 +137,9 @@ pub struct VmafTask {
 pub struct VmafState {
     pub queue: std::collections::VecDeque<VmafTask>,
     pub running_task: Option<String>,
+    /// Historical CRF-VMAF search results from previous tasks
+    /// Used by the optimizer to predict CRF for new tasks
+    pub crf_history: Vec<(f32, f64)>,
 }
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v", "mpg", "mpeg", "3gp", "ts","asf", "rmvb", "vob","m2ts","f4v","mts","ogv", "divx","xvid","rm"];
@@ -521,15 +527,15 @@ fn parse_time_str(time_str: &str) -> f64 {
 /// Get CRF range for an encoder
 fn get_crf_range(encoder: &str) -> (f32, f32) {
     if encoder.contains("libx264") || encoder.contains("libx265") {
-        (18.0, 35.0) // CRF 0-51, practical range 18-35
+        (18.0, 46.0) // H.264/H.265 CRF range
     } else if encoder.contains("libsvtav1") {
-        (20.0, 45.0) // SVT-AV1 CRF range
+        (18.0, 54.0) // SVT-AV1 CRF range
     } else if encoder.contains("nvenc") {
-        (18.0, 35.0) // CQ range for NVENC
+        (18.0, 42.0) // CQ range for NVENC
     } else if encoder.contains("vp9") || encoder.contains("libvpx") {
-        (20.0, 45.0) // VP9 CRF range
+        (18.0, 42.0) // VP9 CRF range
     } else {
-        (18.0, 40.0) // Generic default
+        (1.0, 50.0) // Generic default
     }
 }
 
@@ -605,7 +611,13 @@ fn compress_sample_with_crf(
     input_key: &str,
 ) -> Option<String> {
     let sample_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
-    let sample_output = temp_dir.join(format!("vmaf_sample_{}_{}.{}", sample_id, crf as i32, config.target_format));
+    // Use the original video's container format (extension) for sample segments
+    // This ensures compatibility and avoids format-related issues during VMAF calculation
+    let original_ext = std::path::Path::new(input_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp4");
+    let sample_output = temp_dir.join(format!("vmaf_sample_{}_{}.{}", sample_id, crf as i32, original_ext));
     let sample_output_str = sample_output.to_string_lossy().to_string();
 
     let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
@@ -871,8 +883,12 @@ fn interpolate_crf(samples: &[(f32, f64)], target_vmaf: f64) -> f32 {
     predicted
 }
 
+
+
 /// VMAF-guided CRF search algorithm
 /// Returns (best_crf, final_vmaf_score)
+/// resolution: (width, height) tuple for model selection
+/// crf_history: historical CRF-VMAF pairs from previous tasks for optimizer prediction
 fn search_optimal_crf(
     app: &AppHandle,
     ffmpeg_path: &str,
@@ -880,8 +896,10 @@ fn search_optimal_crf(
     input_path: &str,
     config: &CompressionConfig,
     duration_sec: f64,
+    resolution: (u32, u32),
     pids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
     cancelled_paths: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    crf_history: &[(f32, f64)],
 ) -> Result<(f32, f64), String> {
     let target_vmaf = config.target_vmaf as f64;
     let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
@@ -897,8 +915,18 @@ fn search_optimal_crf(
     // Use first segment for all samples
     let (seg_start, seg_duration) = segments[0];
 
-    // Determine VMAF model
-    let model_filename = if config.vmaf_neg { "vmaf_v0.6.1neg.json" } else { "vmaf_v0.6.1.json" };
+    // Determine VMAF model based on resolution (same logic as in calculate_vmaf)
+    let (width, height) = resolution;
+    let is_high_res = width.max(height) > 2560;
+    let model_filename = match (is_high_res, config.vmaf_neg) {
+        (false, false) => "vmaf_v0.6.1.json",
+        (true, false) => "vmaf_4k_v0.6.1.json",
+        (false, true) => "vmaf_v0.6.1neg.json",
+        (true, true) => "vmaf_4k_v0.6.1neg.json",
+    };
+    
+    println!("Selected VMAF model for search: {} (Resolution: {}x{}, Neg: {})", model_filename, width, height, config.vmaf_neg);
+    
     let model_path = find_vmaf_model(ffmpeg_path, model_filename)
         .ok_or_else(|| format!("VMAF model {} not found", model_filename))?;
 
@@ -907,6 +935,7 @@ fn search_optimal_crf(
     let mut best_crf: Option<f32> = None;
     let mut best_vmaf: Option<f64> = None;
     let mut no_improvement_count = 0;
+    let mut search_complete = false;  // Flag to skip iterative search if binary search found optimal
 
     // Check cancellation helper
     let check_cancelled = || -> bool {
@@ -917,74 +946,302 @@ fn search_optimal_crf(
         }
     };
 
-    // Initial samples: min, mid, max CRF
-    let initial_crfs = vec![min_crf, (min_crf + max_crf) / 2.0, max_crf];
+    // Note: Cross-video optimization has been disabled because different videos have 
+    // vastly different CRF-VMAF relationships, making historical data from other videos unreliable.
+    // Each video now uses independent binary search for the most accurate results.
+    let _ = crf_history; // Suppress unused variable warning
+
+    // Standard search approach (or continuation if optimization didn't find exact match)
+    // Strategy: Test midpoint first, then determine search direction based on result
+    // This is more efficient than testing min, mid, max all at once
     
-    for (idx, &crf) in initial_crfs.iter().enumerate() {
+    if samples.is_empty() {
+        // No samples yet - start with midpoint strategy
+        let mid_crf = (min_crf + max_crf) / 2.0;
+        let mut current_min = min_crf;
+        let mut current_max = max_crf;
+        let mut iteration = 1u32;
+        
+        // Test midpoint first
         if check_cancelled() {
             cleanup_temp_samples(&temp_dir);
             return Err("Cancelled".to_string());
         }
-
+        
         let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
             path: input_path.to_string(),
-            iteration: idx as u32 + 1,
+            iteration,
             max_iterations,
-            current_crf: crf,
+            current_crf: mid_crf,
             current_vmaf: 0.0,
             target_vmaf: config.target_vmaf,
             best_crf,
             best_vmaf,
             samples: samples.clone(),
         });
-
-        // Compress sample
+        
         let sample_path = compress_sample_with_crf(
-            ffmpeg_path, input_path, &temp_dir, crf, seg_start, seg_duration, config, pids, input_path
+            ffmpeg_path, input_path, &temp_dir, mid_crf, seg_start, seg_duration, config, pids, input_path
         );
-
-        if sample_path.is_none() {
-            println!("Failed to compress sample at CRF {}", crf);
-            continue;
-        }
-        let sample_path = sample_path.unwrap();
-
-        // Compute VMAF
-        let vmaf = compute_sample_vmaf(
-            ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
-            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
-        );
-
-        // Cleanup sample
-        let _ = std::fs::remove_file(&sample_path);
-
-        if let Some(score) = vmaf {
-            samples.push((crf, score));
+        
+        if let Some(sample_path) = sample_path {
+            let vmaf = compute_sample_vmaf(
+                ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+                seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
+            );
+            let _ = std::fs::remove_file(&sample_path);
             
-            // Update best if VMAF >= target and CRF is higher (smaller file)
-            if score >= target_vmaf {
-                if best_crf.is_none() || crf > best_crf.unwrap() {
-                    best_crf = Some(crf);
+            if let Some(score) = vmaf {
+                samples.push((mid_crf, score));
+                
+                // Update best if VMAF >= target
+                if score >= target_vmaf {
+                    best_crf = Some(mid_crf);
                     best_vmaf = Some(score);
                 }
+                
+                let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                    path: input_path.to_string(),
+                    iteration,
+                    max_iterations,
+                    current_crf: mid_crf,
+                    current_vmaf: score,
+                    target_vmaf: config.target_vmaf,
+                    best_crf,
+                    best_vmaf,
+                    samples: samples.clone(),
+                });
+                
+                // Check if already close enough
+                if (score - target_vmaf).abs() <= 0.5 {
+                    println!("Midpoint CRF {} is close enough (VMAF {:.2}, target {:.1})", mid_crf, score, target_vmaf);
+                    cleanup_temp_samples(&temp_dir);
+                    return Ok((mid_crf, score));
+                }
+                
+                // Determine search direction based on midpoint result
+                // Higher VMAF than target -> can use higher CRF (more compression)
+                // Lower VMAF than target -> need lower CRF (less compression)
+                if score > target_vmaf {
+                    // VMAF too high, search towards higher CRF
+                    current_min = mid_crf;
+                    println!("Midpoint VMAF {:.2} > target {:.1}, searching higher CRF range [{:.1}, {:.1}]", 
+                        score, target_vmaf, current_min, current_max);
+                } else {
+                    // VMAF too low, search towards lower CRF
+                    current_max = mid_crf;
+                    println!("Midpoint VMAF {:.2} < target {:.1}, searching lower CRF range [{:.1}, {:.1}]", 
+                        score, target_vmaf, current_min, current_max);
+                }
+                
+                // Continue search using interpolation-based prediction
+                while iteration < max_iterations && (current_max - current_min) > 1.0 {
+                    if check_cancelled() {
+                        cleanup_temp_samples(&temp_dir);
+                        return Err("Cancelled".to_string());
+                    }
+                    
+                    iteration += 1;
+                    
+                    // Use interpolation to predict next CRF if we have enough samples
+                    let mut next_crf = if samples.len() >= 2 {
+                        let predicted = interpolate_crf(&samples, target_vmaf);
+                        // Clamp to current search range
+                        predicted.max(current_min).min(current_max)
+                    } else {
+                        // Fallback to midpoint if not enough samples
+                        (current_min + current_max) / 2.0
+                    };
+                    
+                    const MIN_STEP: f32 = 0.8;
+                    
+                    // Check if we already have a sample too close to this CRF (minimum step: 0.8)
+                    if samples.iter().any(|(c, _)| (*c - next_crf).abs() < MIN_STEP) {
+                        // Try midpoint instead
+                        next_crf = (current_min + current_max) / 2.0;
+                        if samples.iter().any(|(c, _)| (*c - next_crf).abs() < MIN_STEP) {
+                            break;
+                        }
+                    }
+                    
+                    let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                        path: input_path.to_string(),
+                        iteration,
+                        max_iterations,
+                        current_crf: next_crf,
+                        current_vmaf: 0.0,
+                        target_vmaf: config.target_vmaf,
+                        best_crf,
+                        best_vmaf,
+                        samples: samples.clone(),
+                    });
+                    
+                    let sample_path = compress_sample_with_crf(
+                        ffmpeg_path, input_path, &temp_dir, next_crf, seg_start, seg_duration, config, pids, input_path
+                    );
+                    
+                    if let Some(sample_path) = sample_path {
+                        let vmaf = compute_sample_vmaf(
+                            ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+                            seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
+                        );
+                        let _ = std::fs::remove_file(&sample_path);
+                        
+                        if let Some(next_score) = vmaf {
+                            samples.push((next_crf, next_score));
+                            
+                            // Update best
+                            if next_score >= target_vmaf {
+                                if best_crf.is_none() || next_crf > best_crf.unwrap() {
+                                    best_crf = Some(next_crf);
+                                    best_vmaf = Some(next_score);
+                                }
+                            }
+                            
+                            let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                                path: input_path.to_string(),
+                                iteration,
+                                max_iterations,
+                                current_crf: next_crf,
+                                current_vmaf: next_score,
+                                target_vmaf: config.target_vmaf,
+                                best_crf,
+                                best_vmaf,
+                                samples: samples.clone(),
+                            });
+                            
+                            // Log progress
+                            println!("CRF {} gave VMAF {:.2} (target: {:.1}, diff: {:.2})", 
+                                next_crf, next_score, target_vmaf, (next_score - target_vmaf).abs());
+                            
+                            // Early termination conditions (same as iterative search)
+                            // Condition 1: best_crf exists and best_vmaf is in [target_vmaf, target_vmaf+0.3]
+                            let early_stop_1 = if let (Some(b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
+                                b_vmaf >= target_vmaf && b_vmaf <= target_vmaf + 0.3
+                            } else {
+                                false
+                            };
+                            
+                            // Condition 2: best_crf exists and there's a sample in [best_crf, best_crf+1] with vmaf < target_vmaf
+                            let early_stop_2 = if let Some(b_crf) = best_crf {
+                                samples.iter().any(|(c, v)| {
+                                    *c >= b_crf && *c <= b_crf + 1.0 && *v < target_vmaf
+                                })
+                            } else {
+                                false
+                            };
+                            
+                            if early_stop_1 {
+                                println!("Early stop (binary): best CRF {:.1} has VMAF {:.2} in target range [{:.1}, {:.1}]", 
+                                    best_crf.unwrap(), best_vmaf.unwrap(), target_vmaf, target_vmaf + 0.3);
+                                search_complete = true;
+                                break;
+                            }
+                            
+                            if early_stop_2 {
+                                println!("Early stop (binary): found sample with VMAF < target in [best_crf {:.1}, {:.1}] range", 
+                                    best_crf.unwrap(), best_crf.unwrap() + 1.0);
+                                search_complete = true;
+                                break;
+                            }
+                            
+                            // Narrow search range
+                            if next_score > target_vmaf {
+                                current_min = next_crf;
+                            } else {
+                                current_max = next_crf;
+                            }
+                        }
+                    }
+                }
             }
-
+        }
+    } else {
+        // We already have samples from optimization, continue with interpolation-based search
+        // Just ensure we have boundary samples if needed
+        let has_min = samples.iter().any(|(c, _)| (*c - min_crf).abs() < 1.0);
+        let has_max = samples.iter().any(|(c, _)| (*c - max_crf).abs() < 1.0);
+        
+        let mut sample_start_idx = samples.len();
+        
+        // Add boundary samples if needed (but only one at a time, in priority order)
+        let boundary_to_test = if !has_min && !has_max {
+            // No boundaries - test one based on current best guess
+            let current_best_crf = samples.iter().map(|(c, _)| *c).sum::<f32>() / samples.len() as f32;
+            if current_best_crf > (min_crf + max_crf) / 2.0 {
+                Some(min_crf)
+            } else {
+                Some(max_crf)
+            }
+        } else if !has_min {
+            Some(min_crf)
+        } else if !has_max {
+            Some(max_crf)
+        } else {
+            None
+        };
+        
+        if let Some(boundary_crf) = boundary_to_test {
+            if check_cancelled() {
+                cleanup_temp_samples(&temp_dir);
+                return Err("Cancelled".to_string());
+            }
+            
             let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
                 path: input_path.to_string(),
-                iteration: idx as u32 + 1,
+                iteration: sample_start_idx as u32 + 1,
                 max_iterations,
-                current_crf: crf,
-                current_vmaf: score,
+                current_crf: boundary_crf,
+                current_vmaf: 0.0,
                 target_vmaf: config.target_vmaf,
                 best_crf,
                 best_vmaf,
                 samples: samples.clone(),
             });
+            
+            let sample_path = compress_sample_with_crf(
+                ffmpeg_path, input_path, &temp_dir, boundary_crf, seg_start, seg_duration, config, pids, input_path
+            );
+            
+            if let Some(sample_path) = sample_path {
+                let vmaf = compute_sample_vmaf(
+                    ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+                    seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
+                );
+                let _ = std::fs::remove_file(&sample_path);
+                
+                if let Some(score) = vmaf {
+                    samples.push((boundary_crf, score));
+                    
+                    if score >= target_vmaf {
+                        if best_crf.is_none() || boundary_crf > best_crf.unwrap() {
+                            best_crf = Some(boundary_crf);
+                            best_vmaf = Some(score);
+                        }
+                    }
+                    
+                    let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                        path: input_path.to_string(),
+                        iteration: sample_start_idx as u32 + 1,
+                        max_iterations,
+                        current_crf: boundary_crf,
+                        current_vmaf: score,
+                        target_vmaf: config.target_vmaf,
+                        best_crf,
+                        best_vmaf,
+                        samples: samples.clone(),
+                    });
+                    
+                    sample_start_idx += 1;
+                }
+            }
         }
     }
 
-    // Iterative search
-    for iter in 0..(max_iterations - 3) {
+    // Iterative search (skip if already found optimal in binary search)
+    let initial_samples_count = samples.len();
+    if !search_complete {
+    for iter in 0..(max_iterations.saturating_sub(initial_samples_count as u32)) {
         if check_cancelled() {
             cleanup_temp_samples(&temp_dir);
             return Err("Cancelled".to_string());
@@ -1000,17 +1257,23 @@ fn search_optimal_crf(
         // Clamp to range
         crf_guess = crf_guess.max(min_crf).min(max_crf);
         
-        // Check if we already have a sample close to this CRF
-        let already_sampled = samples.iter().any(|(c, _)| (c - crf_guess).abs() < 0.5);
+        const MIN_STEP: f32 = 0.8;
+        
+        // Check if we already have a sample too close to this CRF (minimum step: 0.8)
+        let already_sampled = samples.iter().any(|(c, _)| (c - crf_guess).abs() < MIN_STEP);
         if already_sampled {
             // Slight adjustment
             crf_guess += 1.0;
             crf_guess = crf_guess.max(min_crf).min(max_crf);
+            // Check again after adjustment
+            if samples.iter().any(|(c, _)| (c - crf_guess).abs() < MIN_STEP) {
+                break;
+            }
         }
 
         let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
             path: input_path.to_string(),
-            iteration: 3 + iter + 1,
+            iteration: initial_samples_count as u32 + iter + 1,
             max_iterations,
             current_crf: crf_guess,
             current_vmaf: 0.0,
@@ -1063,7 +1326,7 @@ fn search_optimal_crf(
 
             let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
                 path: input_path.to_string(),
-                iteration: 3 + iter + 1,
+                iteration: initial_samples_count as u32 + iter + 1,
                 max_iterations,
                 current_crf: crf_guess,
                 current_vmaf: score,
@@ -1074,53 +1337,90 @@ fn search_optimal_crf(
             });
 
             // Early termination conditions
+            // Condition 1: best_crf exists and best_vmaf is in [target_vmaf, target_vmaf+0.3]
+            let early_stop_condition_1 = if let (Some(b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
+                b_vmaf >= target_vmaf && b_vmaf <= target_vmaf + 0.3
+            } else {
+                false
+            };
+            
+            // Condition 2: best_crf exists and there's a sample in [best_crf, best_crf+1] with vmaf < target_vmaf
+            let early_stop_condition_2 = if let Some(b_crf) = best_crf {
+                samples.iter().any(|(c, v)| {
+                    *c >= b_crf && *c <= b_crf + 1.0 && *v < target_vmaf
+                })
+            } else {
+                false
+            };
+            
+            if early_stop_condition_1 {
+                println!("Early stop: best CRF {:.1} has VMAF {:.2} in target range [{:.1}, {:.1}]", 
+                    best_crf.unwrap(), best_vmaf.unwrap(), target_vmaf, target_vmaf + 0.3);
+                break;
+            }
+            
+            if early_stop_condition_2 {
+                println!("Early stop: found sample with VMAF < target in [best_crf {:.1}, {:.1}] range", 
+                    best_crf.unwrap(), best_crf.unwrap() + 1.0);
+                break;
+            }
+            
+            // Fallback: stop if no improvement for too long
             if no_improvement_count >= 3 {
                 println!("No improvement for 3 iterations, stopping search");
                 break;
-            }
-
-            // If we're very close to target and have a valid best, stop
-            if let Some(bv) = best_vmaf {
-                if (bv - target_vmaf).abs() < 0.5 {
-                    println!("Found CRF {} with VMAF {:.2} close to target {:.2}", best_crf.unwrap(), bv, target_vmaf);
-                    break;
-                }
             }
         } else {
             no_improvement_count += 1;
             if no_improvement_count >= 3 { break; }
         }
     }
+    }  // end of if !search_complete
 
     cleanup_temp_samples(&temp_dir);
 
-    // Return results
-    if let (Some(crf), Some(vmaf)) = (best_crf, best_vmaf) {
-        Ok((crf, vmaf))
-    } else if !samples.is_empty() {
-        // Fallback: find the sample with VMAF closest to but >= target
-        let mut candidate: Option<(f32, f64)> = None;
-        for (c, v) in &samples {
-            if *v >= target_vmaf {
-                if candidate.is_none() || c > &candidate.unwrap().0 {
-                    candidate = Some((*c, *v));
-                }
-            }
-        }
-        if let Some((c, v)) = candidate {
-            Ok((c, v))
-        } else {
-            // No sample meets target, use lowest CRF (highest quality)
-            let mut min_sample = samples[0];
-            for s in &samples {
-                if s.0 < min_sample.0 {
-                    min_sample = *s;
-                }
-            }
-            Ok(min_sample)
-        }
-    } else {
+    // Return results - find the CRF with VMAF closest to target
+    // Priority: 
+    // 1. Prefer samples with VMAF >= target (to ensure quality)
+    // 2. Among those, find the one closest to target (to maximize compression)
+    // 3. If no sample >= target, find the one closest to target anyway
+    
+    if samples.is_empty() {
         // No samples at all, use mid CRF
+        return Ok(((min_crf + max_crf) / 2.0, 0.0));
+    }
+    
+    // First try to find samples that meet or exceed target
+    let mut best_above_target: Option<(f32, f64)> = None;
+    for (c, v) in &samples {
+        if *v >= target_vmaf {
+            // Among samples >= target, prefer the one with VMAF closest to target
+            // (this means highest CRF that still meets quality)
+            if best_above_target.is_none() || 
+               (*v - target_vmaf).abs() < (best_above_target.unwrap().1 - target_vmaf).abs() {
+                best_above_target = Some((*c, *v));
+            }
+        }
+    }
+    
+    if let Some((c, v)) = best_above_target {
+        println!("Returning CRF {:.1} with VMAF {:.2} (>= target {:.1})", c, v, target_vmaf);
+        return Ok((c, v));
+    }
+    
+    // No sample meets target, find the one with VMAF closest to target
+    let mut closest: Option<(f32, f64)> = None;
+    for (c, v) in &samples {
+        if closest.is_none() || 
+           (*v - target_vmaf).abs() < (closest.unwrap().1 - target_vmaf).abs() {
+            closest = Some((*c, *v));
+        }
+    }
+    
+    if let Some((c, v)) = closest {
+        println!("No sample meets target. Returning closest: CRF {:.1} with VMAF {:.2} (target {:.1})", c, v, target_vmaf);
+        Ok((c, v))
+    } else {
         Ok(((min_crf + max_crf) / 2.0, 0.0))
     }
 }
@@ -1193,6 +1493,9 @@ pub fn process_video(
                         }
                     }
                     if let Err(e) = std::fs::copy(&input_path, &output_path) {
+                        eprintln!("[ERROR] Failed to copy file during bitrate threshold skip for '{}': {}", input_path, e);
+                        eprintln!("[INFO] Source: {}", input_path);
+                        eprintln!("[INFO] Destination: {}", output_path);
                         return Err(format!("Skipped (bitrate check), but failed to copy file: {}", e));
                     }
                 }
@@ -1226,13 +1529,45 @@ pub fn process_video(
             output_info: None,
         });
 
+        // Extract resolution for model selection
+        let resolution = if let Some(ref info) = input_info {
+            let parts: Vec<&str> = info.resolution.split('x').collect();
+            if parts.len() == 2 {
+                let w = parts[0].parse::<u32>().unwrap_or(0);
+                let h = parts[1].parse::<u32>().unwrap_or(0);
+                (w, h)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        // Get historical CRF data for optimization
+        let crf_history: Vec<(f32, f64)> = if let Ok(state) = vmaf_state.lock() {
+            state.crf_history.clone()
+        } else {
+            Vec::new()
+        };
+
         match search_optimal_crf(
-            &app, ffmpeg_path, &ffprobe_path, &input_path, &config, duration_sec, &pids, &cancelled_paths
+            &app, ffmpeg_path, &ffprobe_path, &input_path, &config, duration_sec, resolution, &pids, &cancelled_paths, &crf_history
         ) {
             Ok((crf, vmaf)) => {
                 println!("VMAF search complete: CRF={}, VMAF={:.2}", crf, vmaf);
                 vmaf_derived_crf = Some(crf);
                 vmaf_search_score = Some(vmaf);
+                
+                // Update historical CRF data for future task optimization
+                if let Ok(mut state) = vmaf_state.lock() {
+                    state.crf_history.push((crf, vmaf));
+                    // Keep a reasonable size to avoid memory bloat and maintain relevance
+                    // More recent data is more relevant for predicting similar content
+                    if state.crf_history.len() > 50 {
+                        state.crf_history.remove(0);
+                    }
+                    println!("Updated CRF history: {} entries", state.crf_history.len());
+                }
                 
                 let _ = app.emit("video-progress", ProgressPayload {
                     path: input_path.clone(),
@@ -1255,6 +1590,8 @@ pub fn process_video(
                     });
                     return Err("Cancelled during CRF search".to_string());
                 } else {
+                    eprintln!("[ERROR] VMAF CRF search failed for '{}': {}", input_path, e);
+                    eprintln!("[INFO] Using default CRF 23 as fallback");
                     println!("VMAF CRF search failed: {}, using default CRF 23", e);
                     vmaf_derived_crf = Some(23.0); // fallback
                 }
@@ -1268,52 +1605,69 @@ pub fn process_video(
     args.push("-i".to_string());
     args.push(input_path.clone());
 
+    // Check if we are in copy mode (stream copy, no re-encoding)
+    let is_copy_mode = config.compression_mode == "copy";
+
     // Video Encoder
     args.push("-c:v".to_string());
-    let v_enc = if config.video_encoder.is_empty() { "libx264".to_string() } else { config.video_encoder.clone() };
+    let v_enc = if is_copy_mode {
+        "copy".to_string()
+    } else if config.video_encoder.is_empty() { 
+        "libx264".to_string() 
+    } else { 
+        config.video_encoder.clone() 
+    };
     args.push(v_enc.clone());
 
-    // Compression Mode
-    match config.compression_mode.as_str() {
-        "bitrate" => {
-            args.push("-b:v".to_string());
-            args.push(format!("{}k", config.target_bitrate));
-        },
-        "crf" => {
-            if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
-                 args.push("-crf".to_string());
-                 args.push(format!("{}", config.target_crf));
-            } else if v_enc.contains("nvenc") {
-                 args.push("-cq".to_string());
-                 args.push(format!("{}", config.target_crf));
-            } else {
-                 args.push("-q:v".to_string());
-                 args.push(format!("{}", config.target_crf));
-            }
-        },
-        "vmaf" => {
-            // Use CRF derived from VMAF search, or fallback to 23
-            let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);
-            let crf_arg = get_crf_arg(&v_enc);
-            args.push(crf_arg.to_string());
-            args.push(format!("{}", crf_to_use));
-        },
-        _ => {}
+    // Compression Mode (skip for copy mode)
+    if !is_copy_mode {
+        match config.compression_mode.as_str() {
+            "bitrate" => {
+                args.push("-b:v".to_string());
+                args.push(format!("{}k", config.target_bitrate));
+            },
+            "crf" => {
+                if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
+                     args.push("-crf".to_string());
+                     args.push(format!("{}", config.target_crf));
+                } else if v_enc.contains("nvenc") {
+                     args.push("-cq".to_string());
+                     args.push(format!("{}", config.target_crf));
+                } else {
+                     args.push("-q:v".to_string());
+                     args.push(format!("{}", config.target_crf));
+                }
+            },
+            "vmaf" => {
+                // Use CRF derived from VMAF search, or fallback to 23
+                let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);
+                let crf_arg = get_crf_arg(&v_enc);
+                args.push(crf_arg.to_string());
+                args.push(format!("{}", crf_to_use));
+            },
+            _ => {}
+        }
     }
 
 
     // Audio Encoder
     args.push("-c:a".to_string());
-    let a_enc = if config.audio_encoder.is_empty() { "aac".to_string() } else { config.audio_encoder.clone() };
+    let a_enc = if is_copy_mode {
+        "copy".to_string()
+    } else if config.audio_encoder.is_empty() { 
+        "aac".to_string() 
+    } else { 
+        config.audio_encoder.clone() 
+    };
     args.push(a_enc.clone());
 
-    // Resolution
-    if config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
+    // Resolution (skip for copy mode - cannot scale when copying streams)
+    if !is_copy_mode && config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
         args.push("-vf".to_string());
         args.push(format!("scale='min({},iw)':-2", config.max_resolution.width));
     }
 
-    // Custom Filters
+    // Custom Filters (always apply - these can include things like -movflags +faststart)
     for filter in &config.custom_filters {
         if !filter.trim().is_empty() {
              let parts: Vec<&str> = filter.split_whitespace().collect();
@@ -1323,21 +1677,23 @@ pub fn process_video(
         }
     }
     
-    // Encoder Specific Params
-    if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
-        for param in &enc_cfg.custom_params {
-             let parts: Vec<&str> = param.split_whitespace().collect();
-             for p in parts {
-                 args.push(p.to_string());
-             }
+    // Encoder Specific Params (skip for copy mode - no encoding)
+    if !is_copy_mode {
+        if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
+            for param in &enc_cfg.custom_params {
+                 let parts: Vec<&str> = param.split_whitespace().collect();
+                 for p in parts {
+                     args.push(p.to_string());
+                 }
+            }
         }
-    }
-     if let Some(enc_cfg) = config.available_audio_encoders.iter().find(|e| e.value == a_enc) {
-        for param in &enc_cfg.custom_params {
-             let parts: Vec<&str> = param.split_whitespace().collect();
-             for p in parts {
-                 args.push(p.to_string());
-             }
+         if let Some(enc_cfg) = config.available_audio_encoders.iter().find(|e| e.value == a_enc) {
+            for param in &enc_cfg.custom_params {
+                 let parts: Vec<&str> = param.split_whitespace().collect();
+                 for p in parts {
+                     args.push(p.to_string());
+                 }
+            }
         }
     }
 
@@ -1351,6 +1707,17 @@ pub fn process_video(
     args.push("pipe:2".to_string());
 
     let temp_output_path = format!("{}.tmp.{}", output_path, config.target_format);
+    
+    // Ensure output directory exists before starting FFmpeg
+    if let Some(parent) = std::path::Path::new(&temp_output_path).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("[ERROR] Failed to create output directory for '{}': {}", input_path, e);
+                eprintln!("[INFO] Target directory: {:?}", parent);
+                return Err(format!("Failed to create output directory: {}", e));
+            }
+        }
+    }
     
     // 2-Pass Logic
     let mut pass_log_prefix_opt = None;
@@ -1389,7 +1756,11 @@ pub fn process_video(
             .stdout(Stdio::null()) // Use null to avoid blocking if we don't read it
             .stderr(Stdio::piped()) 
             .spawn()
-            .map_err(|e| format!("Failed to spawn Pass 1: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[ERROR] Failed to spawn Pass 1 for '{}': {}", input_path, e);
+                eprintln!("[INFO] FFmpeg path: {}", ffmpeg_path);
+                format!("Failed to spawn Pass 1: {}", e)
+            })?;
 
         let p1_pid = pass1_child.id();
         {
@@ -1398,17 +1769,32 @@ pub fn process_video(
             }
         }
 
-        let p1_stderr = pass1_child.stderr.take().ok_or("Failed to capture Pass 1 stderr")?;
+        let p1_stderr = pass1_child.stderr.take().ok_or_else(|| {
+            eprintln!("[ERROR] Failed to capture Pass 1 stderr for '{}'", input_path);
+            "Failed to capture Pass 1 stderr".to_string()
+        })?;
         let p1_reader = BufReader::new(p1_stderr);
 
         let mut p1_sec = 0.0;
         let mut p1_speed = 0.0;
+        
+        // Collect stderr lines for error reporting
+        let mut p1_stderr_lines: Vec<String> = Vec::new();
+        let max_stderr_lines = 50;
         
         for line in p1_reader.lines() {
              let line = match line {
                 Ok(l) => l,
                 Err(_) => break,
             };
+            
+            // Collect stderr lines (excluding progress lines)
+            if !line.contains("progress=") && !line.trim().is_empty() {
+                p1_stderr_lines.push(line.clone());
+                if p1_stderr_lines.len() > max_stderr_lines {
+                    p1_stderr_lines.remove(0);
+                }
+            }
 
             // Check cancellation
             let is_cancelled = {
@@ -1455,7 +1841,10 @@ pub fn process_video(
             }
         }
 
-        let p1_status = pass1_child.wait().map_err(|e| format!("Failed to wait on video Pass 1: {}", e))?;
+        let p1_status = pass1_child.wait().map_err(|e| {
+            eprintln!("[ERROR] Failed to wait on Pass 1 process for '{}': {}", input_path, e);
+            format!("Failed to wait on video Pass 1: {}", e)
+        })?;
         
         {
             if let Ok(mut map) = pids.lock() {
@@ -1495,6 +1884,18 @@ pub fn process_video(
         }
 
         if !p1_status.success() {
+             eprintln!("[ERROR] Pass 1 failed for '{}': FFmpeg exited with status {:?}", input_path, p1_status);
+             
+             // Print Pass 1 stderr output for debugging
+             if !p1_stderr_lines.is_empty() {
+                 eprintln!("[ERROR] Pass 1 FFmpeg stderr output (last {} lines):", p1_stderr_lines.len());
+                 for stderr_line in &p1_stderr_lines {
+                     eprintln!("  {}", stderr_line);
+                 }
+             } else {
+                 eprintln!("[WARNING] No stderr output captured from Pass 1");
+             }
+             
              // Robust cleanup Pass 1 logs
              std::thread::sleep(std::time::Duration::from_millis(200));
              if let Some(prefix) = &pass_log_prefix_opt {
@@ -1551,7 +1952,12 @@ pub fn process_video(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        .map_err(|e| {
+            eprintln!("[ERROR] Failed to spawn FFmpeg for '{}': {}", input_path, e);
+            eprintln!("[INFO] FFmpeg path: {}", ffmpeg_path);
+            eprintln!("[INFO] Compression mode: {}", config.compression_mode);
+            format!("Failed to spawn ffmpeg: {}", e)
+        })?;
 
     let pid = child.id();
     {
@@ -1560,7 +1966,10 @@ pub fn process_video(
         }
     }
 
-    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        eprintln!("[ERROR] Failed to capture stderr for '{}'", input_path);
+        "Failed to capture stderr".to_string()
+    })?;
     let reader = BufReader::new(stderr);
 
     let mut current_speed = 0.0;
@@ -1570,6 +1979,10 @@ pub fn process_video(
     // Auto-skip logic state
     let mut high_bitrate_count: i32 = 0;
     let auto_skip_enabled = config.compression_mode == "crf" && config.crf_auto_skip;
+    
+    // Collect stderr lines for error reporting
+    let mut stderr_lines: Vec<String> = Vec::new();
+    let max_stderr_lines = 50; // Keep last 50 lines
 
     println!("Starting ffmpeg for {}, duration: {}s", input_path, duration_sec);
 
@@ -1578,6 +1991,15 @@ pub fn process_video(
             Ok(l) => l,
             Err(_) => break,
         };
+        
+        // Collect stderr lines (excluding progress lines which are verbose)
+        if !line.contains("progress=") && !line.trim().is_empty() {
+            stderr_lines.push(line.clone());
+            // Keep only the last N lines to avoid memory issues
+            if stderr_lines.len() > max_stderr_lines {
+                stderr_lines.remove(0);
+            }
+        }
 
         if let Some(idx) = line.find("out_time=") {
             let time_val = line[idx+9..].trim();
@@ -1646,6 +2068,9 @@ pub fn process_video(
                                 }
                                 if let Err(e) = std::fs::copy(&input_path, &output_path) {
                                      // Error during copy
+                                     eprintln!("[ERROR] Failed to copy file during auto-skip for '{}': {}", input_path, e);
+                                     eprintln!("[INFO] Source: {}", input_path);
+                                     eprintln!("[INFO] Destination: {}", output_path);
                                       let _ = app.emit("video-progress", ProgressPayload {
                                         path: input_path.clone(),
                                         progress: 0,
@@ -1702,7 +2127,10 @@ pub fn process_video(
         }
     }
 
-    let status = child.wait().map_err(|e| format!("Failed to wait on ffmpeg: {}", e))?;
+    let status = child.wait().map_err(|e| {
+        eprintln!("[ERROR] Failed to wait on FFmpeg process for '{}': {}", input_path, e);
+        format!("Failed to wait on ffmpeg: {}", e)
+    })?;
     
     {
         if let Ok(mut map) = pids.lock() {
@@ -1715,6 +2143,8 @@ pub fn process_video(
         let verify_result = verify_video(ffmpeg_path, &temp_output_path);
         
         if let Err(e) = verify_result {
+            eprintln!("[ERROR] Video validation failed for '{}': {}", input_path, e);
+            eprintln!("[INFO] Output file may be corrupted or incomplete: {}", temp_output_path);
             // Cleanup temp file
              if std::path::Path::new(&temp_output_path).exists() {
                  let _ = std::fs::remove_file(&temp_output_path);
@@ -1733,10 +2163,12 @@ pub fn process_video(
             return Err(format!("Validation failed: {}", e));
         }
 
-        // 2. Ensure parent directory exists
+        // 2. Ensure parent directory exists (redundant safety check - should already exist)
         if let Some(parent) = std::path::Path::new(&output_path).parent() {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("[ERROR] Failed to create output directory for '{}': {}", input_path, e);
+                    eprintln!("[INFO] Target directory: {:?}", parent);
                     return Err(format!("Failed to create output directory: {}", e));
                 }
             }
@@ -1745,10 +2177,15 @@ pub fn process_video(
         // 3. Safe overwrite logic
         if std::path::Path::new(&output_path).exists() {
              if let Err(e) = std::fs::remove_file(&output_path) {
+                 eprintln!("[ERROR] Failed to remove existing output file for '{}': {}", input_path, e);
+                 eprintln!("[INFO] File to remove: {}", output_path);
                  return Err(format!("Failed to remove existing output file: {}", e));
              }
         }
         if let Err(e) = std::fs::rename(&temp_output_path, &output_path) {
+             eprintln!("[ERROR] Failed to move temp file to output for '{}': {}", input_path, e);
+             eprintln!("[INFO] Temp file: {}", temp_output_path);
+             eprintln!("[INFO] Output file: {}", output_path);
              return Err(format!("Failed to move temp file to output: {}", e));
         }
 
@@ -1764,7 +2201,24 @@ pub fn process_video(
                 if let Some(ref mut info) = output_info {
                     info.vmaf = Some(vmaf_score);
                     info.vmaf_device = if config.vmaf_use_cuda { Some("CUDA".to_string()) } else { Some("CPU".to_string()) };
-                    info.vmaf_model = Some(if config.vmaf_neg { "vmaf_v0.6.1neg.json".to_string() } else { "vmaf_v0.6.1.json".to_string() });
+                    
+                    // Use same resolution-based model selection as in search
+                    let parts: Vec<&str> = info.resolution.split('x').collect();
+                    let (width, height) = if parts.len() == 2 {
+                        let w = parts[0].parse::<u32>().unwrap_or(0);
+                        let h = parts[1].parse::<u32>().unwrap_or(0);
+                        (w, h)
+                    } else {
+                        (0, 0)
+                    };
+                    let is_high_res = width.max(height) > 2560;
+                    let model_filename = match (is_high_res, config.vmaf_neg) {
+                        (false, false) => "vmaf_v0.6.1.json",
+                        (true, false) => "vmaf_4k_v0.6.1.json",
+                        (false, true) => "vmaf_v0.6.1neg.json",
+                        (true, true) => "vmaf_4k_v0.6.1neg.json",
+                    };
+                    info.vmaf_model = Some(model_filename.to_string());
                 }
             }
             
@@ -1863,6 +2317,22 @@ pub fn process_video(
          };
 
          let status_str = if is_cancelled { "Cancelled" } else { "Error" };
+         
+         if !is_cancelled {
+             eprintln!("[ERROR] FFmpeg compression failed for '{}'", input_path);
+             eprintln!("[INFO] FFmpeg exit status: {:?}", status);
+             eprintln!("[INFO] Compression mode: {}", config.compression_mode);
+             
+             // Print FFmpeg stderr output for debugging
+             if !stderr_lines.is_empty() {
+                 eprintln!("[ERROR] FFmpeg stderr output (last {} lines):", stderr_lines.len());
+                 for stderr_line in &stderr_lines {
+                     eprintln!("  {}", stderr_line);
+                 }
+             } else {
+                 eprintln!("[WARNING] No stderr output captured from FFmpeg");
+             }
+         }
 
          let _ = app.emit("video-progress", ProgressPayload {
             path: input_path.clone(),

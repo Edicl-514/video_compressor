@@ -530,7 +530,8 @@
     }
     .status-badge {
         display: inline-block;
-        max-width: 160px;
+        max-width: 140px; /* match .col-status width */
+        box-sizing: border-box;
         padding: 0.25rem 0.6rem;
         border-radius: 4px;
         font-size: 0.75rem;
@@ -554,7 +555,8 @@
         }
         35%,
         50% {
-            transform: translateX(calc(-100% + 140px));
+            /* subtract horizontal padding (0.6rem * 2) so the text scrolls fully into view */
+            transform: translateX(calc(-100% + 140px - 1.2rem));
         }
         65%,
         85% {

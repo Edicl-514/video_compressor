@@ -25,6 +25,8 @@
         "target_bitrate": "目标码率",
         "target_crf": "目标 CRF (质量)",
         "target_vmaf": "目标 VMAF",
+        "copy_mode": "流复制 (不重编码)",
+        "copy_mode_hint": "直接复制音视频流，用于转封装或应用自定义参数（如 -movflags +faststart）",
         "video_encoder": "视频编码器",
         "audio_encoder": "音频编码器",
         "target_format": "目标格式",
@@ -105,6 +107,8 @@
         "close": "关闭",
         "overwrite_warning_title": "覆盖警告",
         "overwrite_warning_message": "源文件将被覆盖。是否继续？",
-        "disabled_by_resolution_limit": "(限制分辨率时无法使用)"
+        "disabled_by_resolution_limit": "(限制分辨率时无法使用)",
+        "vmaf_search_optimization": "启用搜索优化算法",
+        "vmaf_search_optimization_warning": "⚠️ 仅对来源和质量相同的视频启用，提高速度但可能带来误差，若随意启用可能会有反效果"
     }
 }

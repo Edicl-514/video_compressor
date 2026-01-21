@@ -67,7 +67,7 @@
 
     function applyDetectionReport(report: any) {
         console.log("Detection complete:", report);
-        
+
         // Reset visibility and supported status for all encoders first
         config.availableVideoEncoders.forEach((e) => {
             e.visible = false;
@@ -89,7 +89,8 @@
             if (existingIndex >= 0) {
                 config.availableVideoEncoders[existingIndex].visible = true;
                 config.availableVideoEncoders[existingIndex].isSupported = true;
-                config.availableVideoEncoders[existingIndex].name = detected.name;
+                config.availableVideoEncoders[existingIndex].name =
+                    detected.name;
             } else {
                 config.availableVideoEncoders.push({
                     name: detected.name,
@@ -110,7 +111,8 @@
             if (existingIndex >= 0) {
                 config.availableAudioEncoders[existingIndex].visible = true;
                 config.availableAudioEncoders[existingIndex].isSupported = true;
-                config.availableAudioEncoders[existingIndex].name = detected.name;
+                config.availableAudioEncoders[existingIndex].name =
+                    detected.name;
             } else {
                 config.availableAudioEncoders.push({
                     name: detected.name,
@@ -361,6 +363,9 @@
                                     ? $t("common.disabled_by_resolution_limit")
                                     : ""}</option
                             >
+                            <option value={CompressionMode.COPY}
+                                >{$t("common.copy_mode")}</option
+                            >
                         </select>
                     </div>
                     <style>
@@ -415,6 +420,10 @@
                                 min="0"
                                 max="100"
                             />
+                        {:else if config.compressionMode === CompressionMode.COPY}
+                            <small class="copy-mode-hint">
+                                {$t("common.copy_mode_hint")}
+                            </small>
                         {/if}
                     </div>
 
@@ -589,6 +598,8 @@
                                 type="checkbox"
                                 checked={config.maxResolution.enabled}
                                 onchange={toggleResolutionLimit}
+                                disabled={config.compressionMode ===
+                                    CompressionMode.COPY}
                             />
                             {$t("common.limit_resolution")}
                         </label>
@@ -614,7 +625,12 @@
                     <label for="video-encoder"
                         >{$t("common.video_encoder")}</label
                     >
-                    <select id="video-encoder" bind:value={config.videoEncoder}>
+                    <select
+                        id="video-encoder"
+                        bind:value={config.videoEncoder}
+                        disabled={config.compressionMode ===
+                            CompressionMode.COPY}
+                    >
                         {#each config.availableVideoEncoders as enc}
                             {#if enc.visible && shouldShowVideoEncoder(enc.value)}
                                 <option value={enc.value}>{enc.name}</option>
@@ -627,7 +643,12 @@
                     <label for="audio-encoder"
                         >{$t("common.audio_encoder")}</label
                     >
-                    <select id="audio-encoder" bind:value={config.audioEncoder}>
+                    <select
+                        id="audio-encoder"
+                        bind:value={config.audioEncoder}
+                        disabled={config.compressionMode ===
+                            CompressionMode.COPY}
+                    >
                         {#each config.availableAudioEncoders as enc}
                             {#if enc.visible && shouldShowAudioEncoder(enc.value)}
                                 <option value={enc.value}>{enc.name}</option>
@@ -767,6 +788,30 @@
                                 {$t("common.vmaf_neg")}
                             </label>
                         </div>
+
+                        {#if config.compressionMode === CompressionMode.VMAF}
+                            <div class="row" style="margin-top: 12px;">
+                                <label class="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        bind:checked={
+                                            config.vmafSearchOptimization
+                                        }
+                                    />
+                                    {$t("common.vmaf_search_optimization")}
+                                </label>
+                            </div>
+                            {#if config.vmafSearchOptimization}
+                                <div
+                                    class="warning-box"
+                                    style="margin-top: 8px;"
+                                >
+                                    {$t(
+                                        "common.vmaf_search_optimization_warning",
+                                    )}
+                                </div>
+                            {/if}
+                        {/if}
                     </div>
                 </div>
             {:else}
@@ -774,10 +819,7 @@
                 <div class="section">
                     <div class="section-header">
                         <h3>{$t("common.encoder_management")}</h3>
-                        <button
-                            class="secondary-btn"
-                            onclick={detectEncoders}
-                        >
+                        <button class="secondary-btn" onclick={detectEncoders}>
                             {$t("common.detect_encoders")}
                         </button>
                     </div>
@@ -1406,5 +1448,23 @@
         border-color: rgba(255, 153, 153, 0.6);
         color: #ffb3b3;
         background: rgba(255, 153, 153, 0.1);
+    }
+
+    .copy-mode-hint {
+        color: #888;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        padding: 8px 0;
+        display: block;
+    }
+
+    .warning-box {
+        background: rgba(251, 191, 36, 0.15);
+        border: 1px solid rgba(251, 191, 36, 0.4);
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 0.8rem;
+        color: #fbbf24;
+        line-height: 1.5;
     }
 </style>
