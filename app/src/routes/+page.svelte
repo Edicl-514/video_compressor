@@ -37,7 +37,8 @@
     const processing = files.filter(
       (f) =>
         isProcessingStatus(f.status) &&
-        (f.speed !== undefined || f.bitrateKbps !== undefined),
+        (f.bitrateKbps || 0) > 0 &&
+        !f.status.toLowerCase().includes("waiting"),
     );
 
     let totalSpeed = 0;
@@ -837,126 +838,244 @@
       });
     }
 
-    // Queue of indices to process (now in sorted order)
-    const queue = itemsWithIndices
-      .filter((item) => item.f.status !== "Done" && item.f.status !== "Error")
-      .map((item) => item.i);
+    // Initialize queues
+    searchQueue = [];
+    compressionQueue = [];
 
-    const concurrency = settings.ffmpegThreads || 1;
+    // Populate Queues
+    // Filter pending items
+    const pendingItems = itemsWithIndices.filter(
+      (item) =>
+        item.f.status !== "Done" &&
+        item.f.status !== "Error" &&
+        item.f.status !== "Cancelled" &&
+        item.f.status !== "Skipped",
+    );
 
-    async function worker() {
-      while (queue.length > 0) {
-        if (shouldStop || isPaused) break;
+    // If VMAF mode, everything goes to search first.
+    // If NOT VMAF mode, everything goes to compression immediately.
+    const isVmafMode = settings.compressionMode === "vmaf";
 
-        const i = queue.shift();
-        if (i === undefined) break;
-
-        const file = files[i];
-
-        // Prepare output path
-        // Check if video has originalOutputDir set (from multi-drop to "both" zone)
-        const effectiveOutputPath =
-          (file as any).originalOutputDir || outputPath;
-
-        // Check if inputPath is an actual path or a display string (like "Selected: X video")
-        // A valid path starts with a drive letter (Windows) or slash (Unix/UNC)
-        const isInputPathValidPath =
-          inputPath &&
-          (/^[a-zA-Z]:/.test(inputPath) ||
-            inputPath.startsWith("/") ||
-            inputPath.startsWith("\\"));
-
-        const effectiveInputRoot =
-          (file as any).originalOutputDir ||
-          (isInputPathValidPath ? inputPath : null) ||
-          file.path.substring(
-            0,
-            file.path.lastIndexOf(file.path.includes("\\") ? "\\" : "/"),
-          );
-
-        const outPath = getOutputFilePath(
-          file.path,
-          effectiveOutputPath,
-          settings.targetFormat,
-          settings.suffix,
-          effectiveInputRoot,
-        );
-
-        // Update status to Processing
-        files[i].status = "Processing";
-        files[i].progress = 0;
-        files = [...files];
-
-        try {
-          // Check stop or pause flag again before starting expensive operation
-          if (shouldStop || isPaused) {
-            files[i].status = "Pending"; // Revert status if stopped or paused right before start
-            files = [...files];
-            break;
-          }
-
-          await invoke("start_processing", {
-            inputPath: file.path,
-            outputPath: outPath,
-            config: settingsStore.value,
-            durationSec: file.durationSec || 0.0,
-          });
-        } catch (e: any) {
-          console.error("Processing error:", e);
-          // Only update to Error if it wasn't already marked as Cancelled
-          if (files[i] && files[i].status !== "Cancelled") {
-            files[i].status = "Error";
-            files = [...files];
-          }
-        }
+    for (const item of pendingItems) {
+      if (isVmafMode) {
+        searchQueue.push(item.i);
+      } else {
+        compressionQueue.push(item.i);
       }
     }
 
-    const workers = Array(Math.min(concurrency, queue.length))
-      .fill(null)
-      .map(() => worker());
+    if (searchQueue.length === 0 && compressionQueue.length === 0) {
+      isProcessing = false;
+      return;
+    }
 
-    await Promise.all(workers);
+    // Kick off loops
+    processSearchQueue();
+    processCompressionQueue();
+  }
 
-    isProcessing = false;
+  // Define queues
+  let searchQueue: number[] = [];
+  let compressionQueue: number[] = [];
+  let isSearching = false;
+  let activeCompressions = 0;
+
+  async function processSearchQueue() {
+    if (shouldStop || isPaused || isSearching || searchQueue.length === 0)
+      return;
+
+    const i = searchQueue[0]; // Peek
+    if (typeof i === "undefined") return;
+
+    isSearching = true;
+    searchQueue.shift(); // Remove
+
+    const file = files[i];
+    // Update status? run_crf_search emits "Searching CRF" almost immediately.
+
+    try {
+      if (shouldStop || isPaused) throw "Stopped";
+
+      console.log(`Starting CRF Search for ${file.path}`);
+      const result = await invoke("run_crf_search_command", {
+        inputPath: file.path,
+        config: settingsStore.value,
+        durationSec: file.durationSec || 0.0,
+      });
+
+      const [foundCrf, foundScore] = result as [number, number];
+      console.log(
+        `CRF Search Result for ${file.path}: CRF ${foundCrf}, VMAF ${foundScore}`,
+      );
+
+      // Store result
+      // Check if foundCrf/Score are valid numbers
+      // result is [f32, f64]
+      const [fC, fV] = result as [number, number];
+
+      files[i] = {
+        ...files[i],
+        foundCrf: fC,
+        foundVmafScore: fV,
+      };
+
+      // Move to compression queue
+      compressionQueue.push(i);
+      processCompressionQueue(); // Trigger compression immediately
+    } catch (e: any) {
+      console.error(`Error in CRF search for ${file.path}:`, e);
+      if (files[i].status !== "Cancelled") {
+        // If failed (and not cancelled), maybe mark error?
+        // Or if it was cancelled, handleCancel should have taken care of it.
+        // If "Stopped" thrown manually:
+        if (e !== "Stopped") {
+          files[i].status = "Error";
+          files = [...files];
+        }
+      }
+    } finally {
+      isSearching = false;
+      // Trigger next search
+      setTimeout(processSearchQueue, 100);
+    }
+  }
+
+  async function processCompressionQueue() {
+    if (shouldStop || isPaused) return;
+
+    const maxConcurrency = settingsStore.value.ffmpegThreads || 1;
+
+    while (activeCompressions < maxConcurrency && compressionQueue.length > 0) {
+      const i = compressionQueue.shift();
+      if (typeof i === "undefined") break;
+
+      activeCompressions++;
+
+      // Run compression
+      runCompressionTask(i).finally(() => {
+        activeCompressions--;
+        processCompressionQueue(); // Trigger next
+
+        // Check if all done
+        if (
+          searchQueue.length === 0 &&
+          compressionQueue.length === 0 &&
+          activeCompressions === 0 &&
+          !isSearching
+        ) {
+          isProcessing = false;
+        }
+      });
+    }
+  }
+
+  async function runCompressionTask(i: number) {
+    if (shouldStop || isPaused) {
+      // Put back? or just drop?
+      // If stopped, drop. If paused, put back?
+      // For now, if paused/stopped, just don't run. Logic handles resume elsewhere.
+      return;
+    }
+
+    const file = files[i];
+
+    // Prepare output path (Same logic as before)
+    const effectiveOutputPath = (file as any).originalOutputDir || outputPath;
+    const isInputPathValidPath =
+      inputPath &&
+      (/^[a-zA-Z]:/.test(inputPath) ||
+        inputPath.startsWith("/") ||
+        inputPath.startsWith("\\"));
+    const effectiveInputRoot =
+      (file as any).originalOutputDir ||
+      (isInputPathValidPath ? inputPath : null) ||
+      file.path.substring(
+        0,
+        file.path.lastIndexOf(file.path.includes("\\") ? "\\" : "/"),
+      );
+
+    const outPath = getOutputFilePath(
+      file.path,
+      effectiveOutputPath,
+      settingsStore.value.targetFormat,
+      settingsStore.value.suffix,
+      effectiveInputRoot,
+    );
+
+    files[i].status = "Processing";
+    // Note: run_compression_command also emits "Processing", but setting here gives immediate feedback
+    files[i].progress = files[i].vmafSearchEndProgress || 0;
+    files = [...files];
+
+    try {
+      await invoke("run_compression_command", {
+        inputPath: file.path,
+        outputPath: outPath,
+        config: settingsStore.value,
+        durationSec: file.durationSec || 0.0,
+        vmafDerivedCrf: file.foundCrf, // Pass found CRF if exists
+        vmafSearchScore: file.foundVmafScore,
+      });
+    } catch (e: any) {
+      console.error("Compression Processing error:", e);
+      if (files[i] && files[i].status !== "Cancelled") {
+        files[i].status = "Error";
+        files = [...files];
+      }
+    }
   }
 
   function handlePause() {
     isPaused = !isPaused;
     if (!isPaused && isProcessing) {
-      // If we unpaused, we need to restart workers if none are running?
-      // Actually handleStart is already designed to process the queue.
-      // But workers are already gone. So we just call handleStart again.
-      handleStart();
+      // Restart loops directly since handleStart would return early due to isProcessing flag
+      processSearchQueue();
+      processCompressionQueue();
     }
   }
 
   async function handleCancel() {
     console.log("Cancel clicked");
     shouldStop = true;
-    isPaused = false; // Reset pause state on cancel
+    isPaused = false;
+
+    // Clear queues
+    searchQueue = [];
+    compressionQueue = [];
+
+    // Capture active cancellations
+    const promises = [];
 
     // Find currently processing files and send cancel command
-    // Use a loop over index to update state correctly
     for (let i = 0; i < files.length; i++) {
+      const s = files[i].status.toLowerCase();
+      // Expanded check for all active/waiting states
       if (
-        files[i].status.startsWith("Processing") ||
-        files[i].status.startsWith("Searching CRF") ||
-        files[i].status.startsWith("Found CRF") ||
-        files[i].status === "Waiting for VMAF" ||
-        files[i].status === "Evaluating"
+        s.startsWith("processing") ||
+        s.startsWith("searching crf") ||
+        s.startsWith("found crf") ||
+        s === "waiting for vmaf" ||
+        s === "evaluating" ||
+        s.includes("waiting")
       ) {
-        const path = files[i].path;
-        // Immediate UI feedback
         files[i] = { ...files[i], status: "Cancelled", progress: 0 };
-
-        try {
-          await invoke("cancel_processing", { path });
-        } catch (e) {
-          console.error(`Failed to cancel ${path}:`, e);
-        }
+        // Fire and forget individual cancels, but collect promises to wait
+        promises.push(
+          invoke("cancel_processing", { path: files[i].path }).catch((e) =>
+            console.error(`Failed to cancel ${files[i].path}:`, e),
+          ),
+        );
       }
     }
+
+    // Wait for all cancellations to hit backend
+    await Promise.all(promises);
+
+    // Force reset global state to ensure UI unlocks
+    // We do this after cancellations to avoid race conditions where Start is clicked too early
+    isProcessing = false;
+    isSearching = false;
+    activeCompressions = 0;
   }
 
   function handleSettings() {

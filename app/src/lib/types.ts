@@ -26,6 +26,8 @@ export interface VideoInfo {
     vmafModel?: string;
     vmafSearchEndProgress?: number; // Progress when VMAF search ended (for smooth progress)
     originalOutputDir?: string; // For multi-drop mode: output to original directory
+    foundCrf?: number; // Result from VMAF Search
+    foundVmafScore?: number; // Result from VMAF Search
 }
 
 // VMAF CRF search progress event payload

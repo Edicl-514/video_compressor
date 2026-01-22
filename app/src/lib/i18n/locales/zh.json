@@ -108,7 +108,7 @@
         "overwrite_warning_title": "覆盖警告",
         "overwrite_warning_message": "源文件将被覆盖。是否继续？",
         "disabled_by_resolution_limit": "(限制分辨率时无法使用)",
-        "vmaf_search_optimization": "启用搜索优化算法",
-        "vmaf_search_optimization_warning": "⚠️ 仅对来源和质量相同的视频启用，提高速度但可能带来误差，若随意启用可能会有反效果"
+        "vmaf_search_optimization": "使用动态搜索范围",
+        "vmaf_search_optimization_warning": "利用历史稳定性动态调整搜索范围，仅对来源和质量相同的视频启用，提高速度但可能带来±0.5的误差(VMAF分数)"
     }
 }

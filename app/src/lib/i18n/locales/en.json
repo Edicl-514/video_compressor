@@ -108,7 +108,7 @@
         "overwrite_warning_title": "Overwrite Warning",
         "overwrite_warning_message": "The source files will be overwritten. Continue?",
         "disabled_by_resolution_limit": "Disabled by Resolution Limit",
-        "vmaf_search_optimization": "Enable Search Optimization Algorithm",
-        "vmaf_search_optimization_warning": "⚠️ Only enable for videos with identical source and quality. Improves speed but may introduce inaccuracy. May have adverse effects if enabled indiscriminately."
+        "vmaf_search_optimization": "Enable Dynamic Search Range",
+        "vmaf_search_optimization_warning": "Use history to dynamically adjust search range. Only enable for videos with identical source and quality. Improves speed but may introduce inaccuracy (About ±0.5 VMAF score)"
     }
 }

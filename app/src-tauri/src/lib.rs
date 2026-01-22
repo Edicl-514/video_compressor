@@ -244,6 +244,90 @@ async fn compute_vmaf(
     Ok(())
 }
 
+#[tauri::command]
+async fn run_crf_search_command(
+    app: AppHandle,
+    state: State<'_, ProcessingState>,
+    input_path: String,
+    config: video::CompressionConfig,
+    duration_sec: f64
+) -> Result<(f32, f64), String> {
+    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
+         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
+    } else {
+        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+        if root_rel.exists() {
+            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
+        } else {
+            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
+        }
+    };
+    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+    
+    let pids = state.pids.clone();
+    let cancelled_paths = state.cancelled_paths.clone();
+    let vmaf_state = state.vmaf_state.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        video::run_crf_search(
+            app,
+            &ffmpeg_path,
+            input_path,
+            &config,
+            duration_sec,
+            pids,
+            cancelled_paths,
+            vmaf_state
+        )
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn run_compression_command(
+    app: AppHandle,
+    state: State<'_, ProcessingState>,
+    input_path: String,
+    output_path: String,
+    config: video::CompressionConfig,
+    duration_sec: f64,
+    vmaf_derived_crf: Option<f32>,
+    vmaf_search_score: Option<f64>
+) -> Result<(), String> {
+    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
+         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
+    } else {
+        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+        if root_rel.exists() {
+            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
+        } else {
+            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
+        }
+    };
+    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+    
+    let pids = state.pids.clone();
+    let cancelled_paths = state.cancelled_paths.clone();
+    let vmaf_state = state.vmaf_state.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        video::run_ffmpeg_compression_task(
+            app,
+            &ffmpeg_path,
+            input_path,
+            output_path,
+            config,
+            duration_sec,
+            pids,
+            cancelled_paths,
+            vmaf_state,
+            vmaf_derived_crf,
+            vmaf_search_score
+        )
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -312,7 +396,7 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf])
+        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf, run_crf_search_command, run_compression_command])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
