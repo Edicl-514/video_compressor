@@ -3,7 +3,8 @@ export enum CompressionMode {
     BITRATE = 'bitrate',
     CRF = 'crf',
     VMAF = 'vmaf',
-    COPY = 'copy'
+    COPY = 'copy',
+    CUSTOM = 'custom'
 }
 
 export interface VideoInfo {
@@ -112,6 +113,9 @@ export interface AppSettings {
 
     // VMAF search optimization
     vmafSearchOptimization: boolean; // Enable Bayesian optimization for VMAF CRF search
+
+    // Custom Command Mode
+    customCommand: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -165,5 +169,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     showOnlyHwEncoders: false,
 
     // VMAF search optimization
-    vmafSearchOptimization: false
+    vmafSearchOptimization: false,
+
+    // Custom Command default
+    customCommand: 'ffmpeg -i %INPUT% %OUTPUT%'
 };

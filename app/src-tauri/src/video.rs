@@ -118,6 +118,9 @@ pub struct CompressionConfig {
     #[serde(default)]
     #[serde(rename = "vmafSearchOptimization")]
     pub vmaf_search_optimization: bool,
+    #[serde(default)]
+    #[serde(rename = "customCommand")]
+    pub custom_command: String,
 }
 
 pub struct VmafTask {
@@ -660,7 +663,7 @@ fn compress_sample_with_crf(
         command.creation_flags(0x08000000);
     }
 
-    let mut child = match command.spawn() {
+    let child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
             println!("Failed to spawn sample compression: {}", e);
@@ -791,7 +794,7 @@ fn compute_sample_vmaf(
         command.creation_flags(0x08000000);
     }
 
-    let mut child = command.spawn().ok()?;
+    let child = command.spawn().ok()?;
 
     let pid = child.id();
     {
@@ -1273,7 +1276,7 @@ fn search_optimal_crf(
                             
                             // Early termination conditions (same as iterative search)
                             // Condition 1: best_crf exists and best_vmaf is in [target_vmaf, target_vmaf+0.3]
-                            let early_stop_1 = if let (Some(b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
+                            let early_stop_1 = if let (Some(_b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
                                 b_vmaf >= target_vmaf - 0.3 && b_vmaf <= target_vmaf + 0.3
                             } else {
                                 false
@@ -1319,7 +1322,7 @@ fn search_optimal_crf(
         let has_min = samples.iter().any(|(c, _)| (*c - search_min).abs() < 1.0);
         let has_max = samples.iter().any(|(c, _)| (*c - search_max).abs() < 1.0);
         
-        let mut sample_start_idx = samples.len();
+        let sample_start_idx = samples.len();
         
         // Add boundary samples if needed (but only one at a time, in priority order)
         let boundary_to_test = if !has_min && !has_max {
@@ -1389,7 +1392,7 @@ fn search_optimal_crf(
                         samples: samples.clone(),
                     });
                     
-                    sample_start_idx += 1;
+                    
                 }
             }
         }
@@ -1495,7 +1498,7 @@ fn search_optimal_crf(
 
             // Early termination conditions
             // Condition 1: best_crf exists and best_vmaf is in [target_vmaf, target_vmaf+0.3]
-            let early_stop_condition_1 = if let (Some(b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
+            let early_stop_condition_1 = if let (Some(_b_crf), Some(b_vmaf)) = (best_crf, best_vmaf) {
                 b_vmaf >= target_vmaf && b_vmaf <= target_vmaf + 0.3
             } else {
                 false
@@ -1699,6 +1702,40 @@ pub fn run_crf_search(
     }
 }
 
+/// Split command string into arguments, respecting quotes
+fn split_custom_command(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current_arg = String::new();
+    let mut in_quote = false;
+    let mut quote_char = ' ';
+
+    for c in cmd.chars() {
+        if in_quote {
+            if c == quote_char {
+                in_quote = false;
+            } else {
+                current_arg.push(c);
+            }
+        } else {
+            if c == '"' || c == '\'' {
+                in_quote = true;
+                quote_char = c;
+            } else if c.is_whitespace() {
+                if !current_arg.is_empty() {
+                    args.push(current_arg);
+                    current_arg = String::new();
+                }
+            } else {
+                current_arg.push(c);
+            }
+        }
+    }
+    if !current_arg.is_empty() {
+        args.push(current_arg);
+    }
+    args
+}
+
 pub fn run_ffmpeg_compression_task(
     app: AppHandle,
     ffmpeg_path: &str,
@@ -1777,113 +1814,6 @@ pub fn run_ffmpeg_compression_task(
         // Actually, logic below: "let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);" handles None.
     }
 
-    let mut args = Vec::new();
-    args.push("-y".to_string());
-    args.push("-hide_banner".to_string());
-    args.push("-i".to_string());
-    args.push(input_path.clone());
-
-    // Check if we are in copy mode (stream copy, no re-encoding)
-    let is_copy_mode = config.compression_mode == "copy";
-
-    // Video Encoder
-    args.push("-c:v".to_string());
-    let v_enc = if is_copy_mode {
-        "copy".to_string()
-    } else if config.video_encoder.is_empty() { 
-        "libx264".to_string() 
-    } else { 
-        config.video_encoder.clone() 
-    };
-    args.push(v_enc.clone());
-
-    // Compression Mode (skip for copy mode)
-    if !is_copy_mode {
-        match config.compression_mode.as_str() {
-            "bitrate" => {
-                args.push("-b:v".to_string());
-                args.push(format!("{}k", config.target_bitrate));
-            },
-            "crf" => {
-                if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
-                     args.push("-crf".to_string());
-                     args.push(format!("{}", config.target_crf));
-                } else if v_enc.contains("nvenc") {
-                     args.push("-cq".to_string());
-                     args.push(format!("{}", config.target_crf));
-                } else {
-                     args.push("-q:v".to_string());
-                     args.push(format!("{}", config.target_crf));
-                }
-            },
-            "vmaf" => {
-                // Use CRF derived from VMAF search, or fallback to 23
-                let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);
-                let crf_arg = get_crf_arg(&v_enc);
-                args.push(crf_arg.to_string());
-                args.push(format!("{}", crf_to_use));
-            },
-            _ => {}
-        }
-    }
-
-
-    // Audio Encoder
-    args.push("-c:a".to_string());
-    let a_enc = if is_copy_mode {
-        "copy".to_string()
-    } else if config.audio_encoder.is_empty() { 
-        "aac".to_string() 
-    } else { 
-        config.audio_encoder.clone() 
-    };
-    args.push(a_enc.clone());
-
-    // Resolution (skip for copy mode - cannot scale when copying streams)
-    if !is_copy_mode && config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
-        args.push("-vf".to_string());
-        args.push(format!("scale='min({},iw)':-2", config.max_resolution.width));
-    }
-
-    // Custom Filters (always apply - these can include things like -movflags +faststart)
-    for filter in &config.custom_filters {
-        if !filter.trim().is_empty() {
-             let parts: Vec<&str> = filter.split_whitespace().collect();
-             for p in parts {
-                 args.push(p.to_string());
-             }
-        }
-    }
-    
-    // Encoder Specific Params (skip for copy mode - no encoding)
-    if !is_copy_mode {
-        if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
-            for param in &enc_cfg.custom_params {
-                 let parts: Vec<&str> = param.split_whitespace().collect();
-                 for p in parts {
-                     args.push(p.to_string());
-                 }
-            }
-        }
-         if let Some(enc_cfg) = config.available_audio_encoders.iter().find(|e| e.value == a_enc) {
-            for param in &enc_cfg.custom_params {
-                 let parts: Vec<&str> = param.split_whitespace().collect();
-                 for p in parts {
-                     args.push(p.to_string());
-                 }
-            }
-        }
-    }
-
-    // threads
-    if config.ffmpeg_threads > 0 {
-        args.push("-threads".to_string());
-        args.push(format!("{}", config.ffmpeg_threads));
-    }
-
-    args.push("-progress".to_string());
-    args.push("pipe:2".to_string());
-
     let temp_output_path = format!("{}.tmp.{}", output_path, config.target_format);
     
     // Ensure output directory exists before starting FFmpeg
@@ -1895,6 +1825,141 @@ pub fn run_ffmpeg_compression_task(
                 return Err(format!("Failed to create output directory: {}", e));
             }
         }
+    }
+
+    let mut args = Vec::new();
+
+    if config.compression_mode == "custom" {
+        // ALWAYS inject infrastructure args first
+        args.push("-y".to_string());
+        args.push("-hide_banner".to_string());
+        args.push("-nostats".to_string());
+        args.push("-progress".to_string());
+        args.push("pipe:2".to_string());
+
+        let tokens = split_custom_command(&config.custom_command);
+        for (i, token) in tokens.iter().enumerate() {
+            if i == 0 {
+                let lower = token.to_lowercase();
+                if lower == "ffmpeg" || lower == "ffmpeg.exe" {
+                   continue;
+                }
+            }
+            let arg = token.replace("%INPUT%", &input_path).replace("%OUTPUT%", &temp_output_path);
+            args.push(arg);
+        }
+        
+        // Remove temp file if exists to avoid overwrite prompt
+        // (Note: -y should handle this, but keeping it for safety)
+        if std::path::Path::new(&temp_output_path).exists() {
+             let _ = std::fs::remove_file(&temp_output_path);
+        }
+    } else {
+        args.push("-y".to_string());
+        args.push("-hide_banner".to_string());
+        args.push("-i".to_string());
+        args.push(input_path.clone());
+
+        // Check if we are in copy mode (stream copy, no re-encoding)
+        let is_copy_mode = config.compression_mode == "copy";
+
+        // Video Encoder
+        args.push("-c:v".to_string());
+        let v_enc = if is_copy_mode {
+            "copy".to_string()
+        } else if config.video_encoder.is_empty() { 
+            "libx264".to_string() 
+        } else { 
+            config.video_encoder.clone() 
+        };
+        args.push(v_enc.clone());
+
+        // Compression Mode (skip for copy mode)
+        if !is_copy_mode {
+            match config.compression_mode.as_str() {
+                "bitrate" => {
+                    args.push("-b:v".to_string());
+                    args.push(format!("{}k", config.target_bitrate));
+                },
+                "crf" => {
+                    if v_enc.contains("libx264") || v_enc.contains("libx265") || v_enc.contains("libsvtav1") || v_enc.contains("vp9") {
+                         args.push("-crf".to_string());
+                         args.push(format!("{}", config.target_crf));
+                    } else if v_enc.contains("nvenc") {
+                         args.push("-cq".to_string());
+                         args.push(format!("{}", config.target_crf));
+                    } else {
+                         args.push("-q:v".to_string());
+                         args.push(format!("{}", config.target_crf));
+                    }
+                },
+                "vmaf" => {
+                    // Use CRF derived from VMAF search, or fallback to 23
+                    let crf_to_use = vmaf_derived_crf.unwrap_or(23.0);
+                    let crf_arg = get_crf_arg(&v_enc);
+                    args.push(crf_arg.to_string());
+                    args.push(format!("{}", crf_to_use));
+                },
+                _ => {}
+            }
+        }
+
+
+        // Audio Encoder
+        args.push("-c:a".to_string());
+        let a_enc = if is_copy_mode {
+            "copy".to_string()
+        } else if config.audio_encoder.is_empty() { 
+            "aac".to_string() 
+        } else { 
+            config.audio_encoder.clone() 
+        };
+        args.push(a_enc.clone());
+
+        // Resolution (skip for copy mode - cannot scale when copying streams)
+        if !is_copy_mode && config.max_resolution.enabled && config.max_resolution.width > 0 && config.max_resolution.height > 0 {
+            args.push("-vf".to_string());
+            args.push(format!("scale='min({},iw)':-2", config.max_resolution.width));
+        }
+
+        // Custom Filters (always apply - these can include things like -movflags +faststart)
+        for filter in &config.custom_filters {
+            if !filter.trim().is_empty() {
+                 let parts: Vec<&str> = filter.split_whitespace().collect();
+                 for p in parts {
+                     args.push(p.to_string());
+                 }
+            }
+        }
+        
+        // Encoder Specific Params (skip for copy mode - no encoding)
+        if !is_copy_mode {
+            if let Some(enc_cfg) = config.available_video_encoders.iter().find(|e| e.value == v_enc) {
+                for param in &enc_cfg.custom_params {
+                     let parts: Vec<&str> = param.split_whitespace().collect();
+                     for p in parts {
+                         args.push(p.to_string());
+                     }
+                }
+            }
+             if let Some(enc_cfg) = config.available_audio_encoders.iter().find(|e| e.value == a_enc) {
+                for param in &enc_cfg.custom_params {
+                     let parts: Vec<&str> = param.split_whitespace().collect();
+                     for p in parts {
+                         args.push(p.to_string());
+                     }
+                }
+            }
+        }
+
+        // threads
+        if config.ffmpeg_threads > 0 {
+            args.push("-threads".to_string());
+            args.push(format!("{}", config.ffmpeg_threads));
+        }
+
+        args.push("-progress".to_string());
+        args.push("pipe:2".to_string());
     }
     
     // 2-Pass Logic
@@ -2127,7 +2192,7 @@ pub fn run_ffmpeg_compression_task(
 
     let mut child = Command::new(ffmpeg_path)
         .args(&args)
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
@@ -3063,7 +3128,7 @@ fn run_vmaf_instance(
     command.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
     
     #[cfg(windows)]
-    let mut child = {
+    let child = {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW if accessible, otherwise standard
         command.spawn().ok()?

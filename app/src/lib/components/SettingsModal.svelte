@@ -366,6 +366,9 @@
                             <option value={CompressionMode.COPY}
                                 >{$t("common.copy_mode")}</option
                             >
+                            <option value={CompressionMode.CUSTOM}
+                                >{$t("common.custom_mode")}</option
+                            >
                         </select>
                     </div>
                     <style>
@@ -424,6 +427,18 @@
                             <small class="copy-mode-hint">
                                 {$t("common.copy_mode_hint")}
                             </small>
+                        {:else if config.compressionMode === CompressionMode.CUSTOM}
+                            <div class="mode-extra-settings">
+                                <label for="custom-command">{$t("common.custom_command_label")}</label>
+                                <textarea
+                                    id="custom-command"
+                                    class="custom-command-textarea"
+                                    bind:value={config.customCommand}
+                                    rows="3"
+                                    placeholder="ffmpeg -i %INPUT% -c copy %OUTPUT%"
+                                ></textarea>
+                                <small class="copy-mode-hint">{$t("common.custom_command_hint")}</small>
+                            </div>
                         {/if}
                     </div>
 
@@ -599,7 +614,9 @@
                                 checked={config.maxResolution.enabled}
                                 onchange={toggleResolutionLimit}
                                 disabled={config.compressionMode ===
-                                    CompressionMode.COPY}
+                                    CompressionMode.COPY ||
+                                    config.compressionMode ===
+                                        CompressionMode.CUSTOM}
                             />
                             {$t("common.limit_resolution")}
                         </label>
@@ -629,7 +646,8 @@
                         id="video-encoder"
                         bind:value={config.videoEncoder}
                         disabled={config.compressionMode ===
-                            CompressionMode.COPY}
+                            CompressionMode.COPY ||
+                            config.compressionMode === CompressionMode.CUSTOM}
                     >
                         {#each config.availableVideoEncoders as enc}
                             {#if enc.visible && shouldShowVideoEncoder(enc.value)}
@@ -647,7 +665,8 @@
                         id="audio-encoder"
                         bind:value={config.audioEncoder}
                         disabled={config.compressionMode ===
-                            CompressionMode.COPY}
+                            CompressionMode.COPY ||
+                            config.compressionMode === CompressionMode.CUSTOM}
                     >
                         {#each config.availableAudioEncoders as enc}
                             {#if enc.visible && shouldShowAudioEncoder(enc.value)}
@@ -1456,6 +1475,27 @@
         line-height: 1.5;
         padding: 8px 0;
         display: block;
+    }
+
+    .custom-command-textarea {
+        width: 100%;
+        box-sizing: border-box;
+        background: #2a2a2a;
+        color: #fff;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: monospace;
+        resize: vertical;
+        min-height: 64px;
+        max-height: 360px;
+        font-size: 0.95rem;
+    }
+
+    .custom-command-textarea:focus {
+        outline: none;
+        border-color: #646cff;
+        box-shadow: 0 0 0 3px rgba(100,108,255,0.06);
     }
 
     .warning-box {
