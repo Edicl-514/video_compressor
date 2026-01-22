@@ -884,6 +884,71 @@ fn interpolate_crf(samples: &[(f32, f64)], target_vmaf: f64) -> f32 {
 }
 
 
+/// Predict optimal CRF and search range from historical data
+/// Returns (predicted_crf, min_crf, max_crf) if prediction is possible
+/// Uses linear regression on historical CRF-VMAF pairs to predict CRF for target VMAF
+/// Predict optimal CRF and search range from historical data using a filtering approach
+/// Returns (predicted_crf, min_crf, max_crf) if prediction is possible
+fn predict_crf_from_history(
+    crf_history: &[(f32, f64)],
+    target_vmaf: f64,
+    default_min_crf: f32,
+    default_max_crf: f32,
+) -> Option<(f32, f32, f32)> {
+    // Need at least 2 samples for meaningful prediction
+    let n = crf_history.len();
+    if n < 2 {
+        println!("Not enough history for prediction: {} samples (need >= 2)", n);
+        return None;
+    }
+
+    // Since videos are similar and target VMAF is consistent, we use a 
+    // Weighted Moving Average of "Corrected" CRFs.
+    // Even if target VMAF is the same, previous tasks might have reached 95.2 for a target of 95.0.
+    // We adjust the historical CRF to what it "would have been" if it hit exactly the target.
+    // Heuristic: 1 CRF point approx = 6 VMAF points (typical for libx264/libx265)
+    const VMAF_PER_CRF: f64 = 6.0;
+
+    let mut total_weight = 0.0;
+    let mut weighted_crf_sum = 0.0;
+    
+    let mut crfs_for_std: Vec<f32> = Vec::new();
+
+    for (i, (crf, vmaf)) in crf_history.iter().enumerate() {
+        // Linear weight: more recent entries get higher weight
+        let weight = (i + 1) as f32;
+        
+        // Correct the CRF based on deviation from target VMAF
+        // If vmaf > target (better quality), the "ideal" CRF should have been higher (+)
+        // If vmaf < target (worse quality), the "ideal" CRF should have been lower (-)
+        let vmaf_diff = vmaf - target_vmaf;
+        let corrected_crf = *crf + (vmaf_diff / VMAF_PER_CRF) as f32;
+        
+        weighted_crf_sum += corrected_crf * weight;
+        total_weight += weight;
+        crfs_for_std.push(corrected_crf);
+    }
+    
+    let predicted_crf = weighted_crf_sum / total_weight;
+    
+    // Calculate standard deviation to estimate range width
+    let mean_corrected: f32 = crfs_for_std.iter().sum::<f32>() / n as f32;
+    let variance: f32 = crfs_for_std.iter().map(|c| (c - mean_corrected).powi(2)).sum::<f32>() / n as f32;
+    let std_dev = variance.sqrt();
+    
+    // Predcited range width should be relative to historical stability
+    // Based on user feedback (range 4-5), a half-width of 2.0-3.0 is appropriate
+    let half_width = (std_dev * 1.5).max(2.0).min(6.0);
+    
+    let clamped_predicted = predicted_crf.max(default_min_crf).min(default_max_crf);
+    let min_search = (clamped_predicted - half_width).max(default_min_crf);
+    let max_search = (clamped_predicted + half_width).min(default_max_crf);
+
+    println!("History filtering ({} samples): StdDev={:.2}, Predicted CRF={:.1}, Range=[{:.1}, {:.1}]", 
+        n, std_dev, clamped_predicted, min_search, max_search);
+
+    Some((clamped_predicted, min_search, max_search))
+}
 
 /// VMAF-guided CRF search algorithm
 /// Returns (best_crf, final_vmaf_score)
@@ -946,10 +1011,102 @@ fn search_optimal_crf(
         }
     };
 
-    // Note: Cross-video optimization has been disabled because different videos have 
-    // vastly different CRF-VMAF relationships, making historical data from other videos unreliable.
-    // Each video now uses independent binary search for the most accurate results.
-    let _ = crf_history; // Suppress unused variable warning
+    // Use search optimization if enabled: predict CRF from history and test it first
+    // If the predicted CRF gives VMAF within ±0.5 of target, use it directly
+    // Otherwise, use the predicted range for more efficient search
+    let mut search_min = min_crf;
+    let mut search_max = max_crf;
+    
+    if config.vmaf_search_optimization && !crf_history.is_empty() {
+        println!("Search optimization enabled with {} history entries", crf_history.len());
+        
+        if let Some((predicted_crf, pred_min, pred_max)) = 
+            predict_crf_from_history(crf_history, target_vmaf, min_crf, max_crf) 
+        {
+            // Update search range based on prediction
+            search_min = pred_min;
+            search_max = pred_max;
+            println!("Using predicted search range: [{:.1}, {:.1}]", search_min, search_max);
+            
+            // Test the predicted CRF first
+            if check_cancelled() {
+                cleanup_temp_samples(&temp_dir);
+                return Err("Cancelled".to_string());
+            }
+            
+            let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                path: input_path.to_string(),
+                iteration: 1,
+                max_iterations,
+                current_crf: predicted_crf,
+                current_vmaf: 0.0,
+                target_vmaf: config.target_vmaf,
+                best_crf,
+                best_vmaf,
+                samples: samples.clone(),
+            });
+            
+            println!("Testing predicted CRF: {:.1}", predicted_crf);
+            
+            let sample_path = compress_sample_with_crf(
+                ffmpeg_path, input_path, &temp_dir, predicted_crf, seg_start, seg_duration, config, pids, input_path
+            );
+            
+            if let Some(sample_path) = sample_path {
+                let vmaf = compute_sample_vmaf(
+                    ffmpeg_path, ffprobe_path, input_path, &sample_path, &model_path,
+                    seg_start, seg_duration, config.vmaf_use_cuda, pids, input_path, &config.custom_vmaf_params
+                );
+                let _ = std::fs::remove_file(&sample_path);
+                
+                if let Some(score) = vmaf {
+                    samples.push((predicted_crf, score));
+                    
+                    if score >= target_vmaf {
+                        best_crf = Some(predicted_crf);
+                        best_vmaf = Some(score);
+                    }
+                    
+                    let _ = app.emit("vmaf-search-progress", VmafSearchPayload {
+                        path: input_path.to_string(),
+                        iteration: 1,
+                        max_iterations,
+                        current_crf: predicted_crf,
+                        current_vmaf: score,
+                        target_vmaf: config.target_vmaf,
+                        best_crf,
+                        best_vmaf,
+                        samples: samples.clone(),
+                    });
+                    
+                    let vmaf_diff = (score - target_vmaf).abs();
+                    println!("Predicted CRF {:.1} gave VMAF {:.2} (target: {:.1}, diff: {:.2})", 
+                        predicted_crf, score, target_vmaf, vmaf_diff);
+                    
+                    // If within ±0.5 of target, use this CRF directly
+                    if vmaf_diff <= 0.5 {
+                        println!("Prediction successful! VMAF {:.2} is within ±0.5 of target {:.1}", 
+                            score, target_vmaf);
+                        cleanup_temp_samples(&temp_dir);
+                        return Ok((predicted_crf, score));
+                    }
+                    
+                    println!("Prediction not close enough, continuing with optimized search range");
+                    
+                    // Adjust search range based on result
+                    if score > target_vmaf {
+                        // VMAF too high, can use higher CRF
+                        search_min = predicted_crf;
+                    } else {
+                        // VMAF too low, need lower CRF
+                        search_max = predicted_crf;
+                    }
+                }
+            }
+        }
+    } else if config.vmaf_search_optimization {
+        println!("Search optimization enabled but no history available, using standard search");
+    }
 
     // Standard search approach (or continuation if optimization didn't find exact match)
     // Strategy: Test midpoint first, then determine search direction based on result
@@ -957,9 +1114,9 @@ fn search_optimal_crf(
     
     if samples.is_empty() {
         // No samples yet - start with midpoint strategy
-        let mid_crf = (min_crf + max_crf) / 2.0;
-        let mut current_min = min_crf;
-        let mut current_max = max_crf;
+        let mid_crf = (search_min + search_max) / 2.0;
+        let mut current_min = search_min;
+        let mut current_max = search_max;
         let mut iteration = 1u32;
         
         // Test midpoint first
@@ -1159,8 +1316,8 @@ fn search_optimal_crf(
     } else {
         // We already have samples from optimization, continue with interpolation-based search
         // Just ensure we have boundary samples if needed
-        let has_min = samples.iter().any(|(c, _)| (*c - min_crf).abs() < 1.0);
-        let has_max = samples.iter().any(|(c, _)| (*c - max_crf).abs() < 1.0);
+        let has_min = samples.iter().any(|(c, _)| (*c - search_min).abs() < 1.0);
+        let has_max = samples.iter().any(|(c, _)| (*c - search_max).abs() < 1.0);
         
         let mut sample_start_idx = samples.len();
         
@@ -1168,15 +1325,15 @@ fn search_optimal_crf(
         let boundary_to_test = if !has_min && !has_max {
             // No boundaries - test one based on current best guess
             let current_best_crf = samples.iter().map(|(c, _)| *c).sum::<f32>() / samples.len() as f32;
-            if current_best_crf > (min_crf + max_crf) / 2.0 {
-                Some(min_crf)
+            if current_best_crf > (search_min + search_max) / 2.0 {
+                Some(search_min)
             } else {
-                Some(max_crf)
+                Some(search_max)
             }
         } else if !has_min {
-            Some(min_crf)
+            Some(search_min)
         } else if !has_max {
-            Some(max_crf)
+            Some(search_max)
         } else {
             None
         };
@@ -1255,7 +1412,7 @@ fn search_optimal_crf(
         let mut crf_guess = interpolate_crf(&samples, target_vmaf);
         
         // Clamp to range
-        crf_guess = crf_guess.max(min_crf).min(max_crf);
+        crf_guess = crf_guess.max(search_min).min(search_max);
         
         const MIN_STEP: f32 = 0.8;
         
@@ -1264,7 +1421,7 @@ fn search_optimal_crf(
         if already_sampled {
             // Slight adjustment
             crf_guess += 1.0;
-            crf_guess = crf_guess.max(min_crf).min(max_crf);
+            crf_guess = crf_guess.max(search_min).min(search_max);
             // Check again after adjustment
             if samples.iter().any(|(c, _)| (c - crf_guess).abs() < MIN_STEP) {
                 break;
@@ -1387,7 +1544,7 @@ fn search_optimal_crf(
     
     if samples.is_empty() {
         // No samples at all, use mid CRF
-        return Ok(((min_crf + max_crf) / 2.0, 0.0));
+        return Ok(((search_min + search_max) / 2.0, 0.0));
     }
     
     // First try to find samples that meet or exceed target
@@ -1421,7 +1578,7 @@ fn search_optimal_crf(
         println!("No sample meets target. Returning closest: CRF {:.1} with VMAF {:.2} (target {:.1})", c, v, target_vmaf);
         Ok((c, v))
     } else {
-        Ok(((min_crf + max_crf) / 2.0, 0.0))
+        Ok(((search_min + search_max) / 2.0, 0.0))
     }
 }
 
