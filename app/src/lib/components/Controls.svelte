@@ -10,7 +10,7 @@
 <div class="controls">
     <div class="main-actions">
         {#if !isProcessing || isPaused}
-            <button class="btn btn-primary" on:click={() => dispatch("start")}
+            <button class="btn btn-primary" on:click={() => dispatch(isPaused ? "resume" : "start")}
                 >{isPaused ? $t("common.resume") : $t("common.start")}</button
             >
         {:else}

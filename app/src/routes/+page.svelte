@@ -131,6 +131,14 @@
     isScanning = true;
     try {
       console.log("Scanning directory:", inputPath);
+      
+      // Clear CRF history when rescanning
+      try {
+        await invoke("clear_crf_history");
+      } catch (e) {
+        console.error("Failed to clear CRF history:", e);
+      }
+      
       const result: any = await invoke("scan_directory", { path: inputPath });
       files = result.videos || [];
       console.log("Found files:", files.length);
@@ -720,7 +728,8 @@
   }
 
   async function handleStart() {
-    if (isProcessing) return;
+    // Prevent multiple simultaneous starts (except when resuming from pause)
+    if (isProcessing && !isPaused) return;
 
     // Check if there are any files to process
     const pendingFiles = files.filter(
@@ -843,12 +852,25 @@
     compressionQueue = [];
 
     // Populate Queues
+    // Reset Cancelled files to Pending before filtering
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].status === "Cancelled") {
+        files[i] = { ...files[i], status: "Pending", progress: 0 };
+      }
+    }
+
+    // Clear cancelled paths in backend
+    try {
+      await invoke("clear_cancelled_paths");
+    } catch (e) {
+      console.error("Failed to clear cancelled paths:", e);
+    }
+    
     // Filter pending items
     const pendingItems = itemsWithIndices.filter(
       (item) =>
         item.f.status !== "Done" &&
         item.f.status !== "Error" &&
-        item.f.status !== "Cancelled" &&
         item.f.status !== "Skipped",
     );
 
@@ -1028,9 +1050,21 @@
   function handlePause() {
     isPaused = !isPaused;
     if (!isPaused && isProcessing) {
-      // Restart loops directly since handleStart would return early due to isProcessing flag
+      // Restart loops directly when resuming
       processSearchQueue();
       processCompressionQueue();
+    }
+  }
+
+  function handleResume() {
+    if (isPaused) {
+      isPaused = false;
+      // Restart loops directly when resuming
+      processSearchQueue();
+      processCompressionQueue();
+    } else {
+      // If not paused, treat as normal start
+      handleStart();
     }
   }
 
@@ -1113,6 +1147,7 @@
       {isProcessing}
       {isPaused}
       on:start={handleStart}
+      on:resume={handleResume}
       on:pause={handlePause}
       on:cancel={handleCancel}
       on:settings={handleSettings}

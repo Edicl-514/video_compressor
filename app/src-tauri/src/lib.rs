@@ -175,6 +175,26 @@ async fn cancel_processing(
 }
 
 #[tauri::command]
+async fn clear_cancelled_paths(
+    state: State<'_, ProcessingState>,
+) -> Result<(), String> {
+    if let Ok(mut set) = state.cancelled_paths.lock() {
+        set.clear();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_crf_history(
+    state: State<'_, ProcessingState>,
+) -> Result<(), String> {
+    if let Ok(mut v_state) = state.vmaf_state.lock() {
+        v_state.crf_history.clear();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn compute_vmaf(
     app: AppHandle,
     state: State<'_, ProcessingState>,
@@ -396,7 +416,7 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, compute_vmaf, run_crf_search_command, run_compression_command])
+        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, clear_cancelled_paths, clear_crf_history, compute_vmaf, run_crf_search_command, run_compression_command])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
