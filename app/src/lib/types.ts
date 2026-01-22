@@ -116,6 +116,9 @@ export interface AppSettings {
 
     // Custom Command Mode
     customCommand: string;
+
+    // Welcome Wizard
+    firstRun: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -172,5 +175,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     vmafSearchOptimization: false,
 
     // Custom Command default
-    customCommand: 'ffmpeg -i %INPUT% %OUTPUT%'
+    customCommand: 'ffmpeg -i %INPUT% %OUTPUT%',
+    firstRun: true
 };

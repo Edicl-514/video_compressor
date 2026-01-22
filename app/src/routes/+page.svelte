@@ -131,14 +131,14 @@
     isScanning = true;
     try {
       console.log("Scanning directory:", inputPath);
-      
+
       // Clear CRF history when rescanning
       try {
         await invoke("clear_crf_history");
       } catch (e) {
         console.error("Failed to clear CRF history:", e);
       }
-      
+
       const result: any = await invoke("scan_directory", { path: inputPath });
       files = result.videos || [];
       console.log("Found files:", files.length);
@@ -865,7 +865,7 @@
     } catch (e) {
       console.error("Failed to clear cancelled paths:", e);
     }
-    
+
     // Filter pending items
     const pendingItems = itemsWithIndices.filter(
       (item) =>

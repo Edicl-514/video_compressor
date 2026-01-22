@@ -113,5 +113,23 @@
         "disabled_by_resolution_limit": "(限制分辨率时无法使用)",
         "vmaf_search_optimization": "使用动态搜索范围",
         "vmaf_search_optimization_warning": "利用历史稳定性动态调整搜索范围，仅对来源和质量相同的视频启用，提高速度但可能带来±0.5的误差(VMAF分数)"
+    },
+    "welcome_wizard": {
+        "title": "欢迎",
+        "intro": "欢迎使用视频压缩器。让我们完成初始设置。",
+        "step_language": "选择语言",
+        "step_encoders": "检测编码器",
+        "step_mode": "压缩模式",
+        "detecting": "正在检测硬件能力...",
+        "detection_result": "发现了 {count} 个可用视频编码器。",
+        "recommended_encoder": "推荐编码器",
+        "mode_selection_desc": "选择您希望如何压缩视频。",
+        "recommended_mode": "推荐",
+        "finish": "开始使用",
+        "next": "下一步",
+        "skip": "跳过",
+        "manual_encoder_selection": "手动选择编码器 (可选)",
+        "gpu_detected_hint": "检测到高性能 NVIDIA 显卡。推荐使用目标 VMAF 模式以获得最佳的画质/体积平衡。",
+        "cpu_detected_hint": "未检测到特定 NVIDIA 显卡或首选 CPU 编码。推荐使用目标 CRF 模式以保证稳定性。"
     }
 }

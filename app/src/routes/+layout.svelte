@@ -4,6 +4,7 @@
     import { waitLocale } from "svelte-i18n";
     import { settingsStore } from "$lib/stores/settings.svelte";
     import { browser } from "$app/environment";
+    import WelcomeWizard from "$lib/components/WelcomeWizard.svelte";
 
     let { children } = $props();
 
@@ -25,6 +26,10 @@
     <!-- Loading translations... -->
 {:then}
     {@render children()}
+
+    {#if settingsStore.value.firstRun}
+        <WelcomeWizard />
+    {/if}
 {/await}
 
 <style>

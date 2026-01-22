@@ -113,5 +113,23 @@
         "disabled_by_resolution_limit": "Disabled by Resolution Limit",
         "vmaf_search_optimization": "Enable Dynamic Search Range",
         "vmaf_search_optimization_warning": "Use history to dynamically adjust search range. Only enable for videos with identical source and quality. Improves speed but may introduce inaccuracy (About ±0.5 VMAF score)"
+    },
+    "welcome_wizard": {
+        "title": "Welcome",
+        "intro": "Welcome to Video Compressor. Let's get you set up.",
+        "step_language": "Select Language",
+        "step_encoders": "Detect Encoders",
+        "step_mode": "Compression Mode",
+        "detecting": "Detecting hardware capabilities...",
+        "detection_result": "Found {count} capable videos encoders.",
+        "recommended_encoder": "Recommended Encoder",
+        "mode_selection_desc": "Choose how you want to compress your videos.",
+        "recommended_mode": "Recommended",
+        "finish": "Get Started",
+        "next": "Next",
+        "skip": "Skip",
+        "manual_encoder_selection": "Manually select encoder (optional)",
+        "gpu_detected_hint": "High-performance NVIDIA GPU detected. Target VMAF mode is recommended for best quality/size balance.",
+        "cpu_detected_hint": "No dedicated NVIDIA GPU detected or CPU encoding preferred. Target CRF is recommended for reliability."
     }
 }
