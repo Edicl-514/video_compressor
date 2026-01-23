@@ -150,13 +150,15 @@
 <style>
   .path-selector {
     padding: 1.5rem;
-    background-color: #2a2a2a;
-    border-radius: 12px;
+    background: rgba(30, 30, 30, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
     gap: 1.2rem;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    border: 1px solid #333;
+    border: 1px solid var(--border-color);
   }
   .path-row {
     display: flex;
@@ -169,7 +171,7 @@
   }
   label {
     width: 60px;
-    color: #a0a0a0;
+    color: var(--text-muted);
     font-weight: 500;
     font-size: 0.9rem;
   }
@@ -179,11 +181,11 @@
   }
   input {
     width: 100%;
-    padding: 0.7rem 1rem;
-    background-color: #1a1a1a;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    background-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
     outline: none;
     transition: all 0.2s ease;
     font-family: "JetBrains Mono", monospace;
@@ -191,39 +193,41 @@
     box-sizing: border-box;
   }
   input:focus {
-    border-color: #646cff;
-    box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.1);
-    background-color: #222;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px var(--primary-glow);
+    background-color: rgba(0, 0, 0, 0.3);
   }
   button {
     padding: 0.7rem 1.4rem;
-    background-color: #3a3a3a;
-    color: #fff;
-    border: 1px solid #555;
-    border-radius: 8px;
+    background-color: var(--surface-color);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
     cursor: pointer;
     font-weight: 500;
-    transition: all 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     font-size: 0.9rem;
   }
   button:hover {
-    background-color: #646cff;
-    border-color: #646cff;
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
     transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(100, 108, 255, 0.3);
   }
   button:active {
     transform: translateY(0);
   }
   button:disabled {
-    background-color: #2a2a2a;
-    color: #666;
+    background-color: rgba(255,255,255,0.05);
+    color: var(--text-muted);
     cursor: not-allowed;
-    border-color: #444;
+    border-color: transparent;
+    box-shadow: none;
   }
   button:disabled:hover {
     transform: none;
-    background-color: #2a2a2a;
-    border-color: #444;
+    background-color: rgba(255,255,255,0.05);
+    border-color: transparent;
   }
   .browse-buttons {
     display: flex;

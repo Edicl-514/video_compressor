@@ -373,7 +373,7 @@
                     </div>
                     <style>
                         .compression-select {
-                            width: 436px;
+                            width: 440px;
                         }
                     </style>
 
@@ -429,7 +429,9 @@
                             </small>
                         {:else if config.compressionMode === CompressionMode.CUSTOM}
                             <div class="mode-extra-settings">
-                                <label for="custom-command">{$t("common.custom_command_label")}</label>
+                                <label for="custom-command"
+                                    >{$t("common.custom_command_label")}</label
+                                >
                                 <textarea
                                     id="custom-command"
                                     class="custom-command-textarea"
@@ -437,7 +439,9 @@
                                     rows="3"
                                     placeholder="ffmpeg -i %INPUT% -c copy %OUTPUT%"
                                 ></textarea>
-                                <small class="copy-mode-hint">{$t("common.custom_command_hint")}</small>
+                                <small class="copy-mode-hint"
+                                    >{$t("common.custom_command_hint")}</small
+                                >
                             </div>
                         {/if}
                     </div>
@@ -1063,23 +1067,25 @@
         left: 0;
         width: 100vw;
         height: 100vh;
-        background: rgba(0, 0, 0, 0.5);
-        backdrop-filter: blur(4px);
+        background: rgba(0, 0, 0, 0.65);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
         display: flex;
         justify-content: center;
         align-items: center;
         z-index: 1000;
-        animation: fadein 0.2s ease-out;
+        animation: fadein 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
     }
 
     .modal {
-        background: #1e1e1e;
-        color: #f0f0f0;
+        background: var(--bg-color);
+        background: linear-gradient(to bottom, #252525, #1e1e1e);
+        color: var(--text-main);
         width: 500px;
         max-width: 90vw;
         max-height: 85vh;
-        border-radius: 12px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-color);
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -1088,9 +1094,9 @@
     }
 
     header {
-        padding: 16px 20px;
-        background: #252525;
-        border-bottom: 1px solid #333;
+        padding: 18px 24px;
+        background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid var(--border-color);
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -1130,27 +1136,71 @@
         gap: 8px;
     }
 
+    h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-main);
+    }
+
+    h4 {
+        margin: 16px 0 8px 0;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .group-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        display: block;
+        margin-bottom: 8px;
+    }
+
+    label:not(.checkbox-label) {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 4px;
+    }
+
     label {
-        font-size: 0.9rem;
-        color: #aaa;
+        font-size: 0.95rem;
+        color: var(--text-main);
     }
 
     input[type="number"],
     input[type="text"],
     select {
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 8px 12px;
-        color: #fff;
+        background: #121212;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        color: #ffffff;
         font-family: inherit;
-        font-size: 1rem;
+        font-size: 0.95rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+
+    select option {
+        background-color: #121212;
+        color: #ffffff;
     }
 
     input:focus,
     select:focus {
         outline: none;
-        border-color: #646cff;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 3px var(--primary-glow);
+        background: #1a1a1a;
     }
 
     .checkbox-label {
@@ -1197,24 +1247,29 @@
     }
 
     .primary-btn {
-        background: #646cff;
+        background: var(--primary-color);
+        background: linear-gradient(135deg, var(--primary-color), var(--primary-active));
         color: white;
         border: none;
+        box-shadow: 0 4px 6px rgba(100, 108, 255, 0.25);
     }
 
     .primary-btn:hover {
-        background: #535bf2;
+        background: var(--primary-hover);
+        box-shadow: 0 6px 12px rgba(100, 108, 255, 0.4);
+        transform: translateY(-1px);
     }
 
     .secondary-btn {
         background: transparent;
-        color: #aaa;
-        border: 1px solid #444;
+        color: var(--text-muted);
+        border: 1px solid var(--border-color);
     }
 
     .secondary-btn:hover {
-        border-color: #666;
-        color: #fff;
+        border-color: var(--text-muted);
+        color: var(--text-main);
+        background: rgba(255, 255, 255, 0.05);
     }
 
     .section-header {
@@ -1495,7 +1550,7 @@
     .custom-command-textarea:focus {
         outline: none;
         border-color: #646cff;
-        box-shadow: 0 0 0 3px rgba(100,108,255,0.06);
+        box-shadow: 0 0 0 3px rgba(100, 108, 255, 0.06);
     }
 
     .warning-box {

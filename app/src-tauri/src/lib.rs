@@ -29,6 +29,36 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
+fn get_background_image(app: AppHandle) -> Option<Vec<u8>> {
+    // 1. Try executable directory
+    if let Ok(exe_dir) = app.path().executable_dir() {
+        println!("Checking for background image in exe_dir: {:?}", exe_dir);
+        for ext in &["png", "jpg", "jpeg"] {
+            let path = exe_dir.join(format!("back.{}", ext));
+            if path.exists() {
+                println!("Found background image at: {:?}", path);
+                return std::fs::read(path).ok();
+            }
+        }
+    }
+
+    // 2. Try current working directory (useful for dev)
+    if let Ok(cwd) = std::env::current_dir() {
+        println!("Checking for background image in cwd: {:?}", cwd);
+        for ext in &["png", "jpg", "jpeg"] {
+            let path = cwd.join(format!("back.{}", ext));
+            if path.exists() {
+                println!("Found background image at: {:?}", path);
+                return std::fs::read(path).ok();
+            }
+        }
+    }
+
+    println!("No background image (back.png/jpg) found.");
+    None
+}
+
+#[tauri::command]
 async fn scan_directory(path: String) -> Result<video::ScanResult, String> {
     Ok(video::scan_videos(&path))
 }
@@ -416,7 +446,22 @@ pub fn run() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, scan_directory, scan_multiple_paths, categorize_paths, get_video_metadata, detect_encoders, start_processing, cancel_processing, clear_cancelled_paths, clear_crf_history, compute_vmaf, run_crf_search_command, run_compression_command])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            get_background_image,
+            scan_directory,
+            scan_multiple_paths,
+            categorize_paths,
+            get_video_metadata,
+            detect_encoders,
+            start_processing,
+            cancel_processing,
+            clear_cancelled_paths,
+            clear_crf_history,
+            compute_vmaf,
+            run_crf_search_command,
+            run_compression_command
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

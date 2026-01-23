@@ -1,12 +1,112 @@
 /* Global scrollbar styles: works for Chromium (Tauri/Chromium-based) and Firefox */
 :root {
+  /* Design Tokens */
+  --primary-color: #646cff;
+  --primary-hover: #747bff;
+  --primary-active: #535bf2;
+  --primary-glow: rgba(100, 108, 255, 0.4);
+
+  --bg-color: #1a1a1a;
+  --surface-color: #252525;
+  --surface-hover: #2f2f2f;
+  
+  --text-main: #ffffff;
+  --text-muted: #a1a1aa;
+  
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.2);
+  
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.15);
+  --shadow-glow: 0 0 15px var(--primary-glow);
+
+  --font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+
+  /* Scrollbar */
   --scrollbar-bg: transparent;
-  --scrollbar-thumb: rgba(100, 100, 110, 0.45);
-  --scrollbar-thumb-hover: rgba(100, 100, 110, 0.65);
-  --scrollbar-size: 10px;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+  --scrollbar-size: 8px;
 }
 
-/* WebKit-based browsers (Chrome, Edge, Electron, Tauri's WebView) */
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--bg-color);
+  color: var(--text-main);
+  font-family: var(--font-family);
+  line-height: 1.5;
+  overflow: hidden; /* App-like feel */
+}
+
+/* Global Transition */
+button, input, select, .btn, .card {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  background: rgba(30, 30, 30, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+}
+
+/* Modern Inputs */
+input[type="text"],
+input[type="number"],
+input[type="password"],
+select,
+textarea {
+  background-color: #121212;
+  border: 1px solid var(--border-color);
+  color: #ffffff;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+select {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+select option {
+  background-color: #121212;
+  color: #ffffff;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-glow);
+  background-color: #1a1a1a;
+}
+
+/* Modern Buttons (Global resets if needed, but components handle most) */
+button {
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Scrollbar Styles */
 *::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
@@ -19,7 +119,7 @@
 *::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 999px;
-  border: 2px solid transparent; /* creates padding around thumb */
+  border: 2px solid transparent; 
   background-clip: padding-box;
 }
 
@@ -33,10 +133,6 @@
 
 /* Firefox */
 * {
-  scrollbar-width: thin; /* auto | thin | none */
+  scrollbar-width: thin; 
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-bg);
 }
-
-/* Example helpers: a compact scrollbar (override on specific elements)
- .compact-scroll { --scrollbar-size: 8px; }
-*/

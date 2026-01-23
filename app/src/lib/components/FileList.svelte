@@ -384,13 +384,15 @@
 <style>
     .file-list-container {
         flex: 1;
-        background-color: #1e1e1e;
-        border-radius: 12px;
+        background: rgba(30, 30, 30, 0.65);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: var(--radius-lg);
         overflow-y: auto;
-        border: 1px solid #333;
+        border: 1px solid var(--border-color);
         min-height: 200px;
-        box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.2);
         position: relative;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     }
 
     .empty-state {
@@ -398,50 +400,72 @@
         align-items: center;
         justify-content: center;
         height: 100%;
-        color: #666;
+        color: var(--text-muted);
         font-size: 1.1rem;
     }
 
     .file-list {
         width: 100%;
-        border-collapse: collapse;
-        color: #ddd;
+        border-collapse: separate;
+        border-spacing: 0 4px;
+        color: var(--text-main);
         font-size: 0.9rem;
         table-layout: fixed;
     }
     th,
     td {
-        padding: 0.8rem 1rem;
+        padding: 12px 16px;
         text-align: left;
-        border-bottom: 1px solid #2d2d2d;
         overflow: hidden;
     }
+    
+    td {
+        background-color: rgba(255, 255, 255, 0.02);
+        transition: background-color 0.2s ease;
+    }
+    
+    td:first-child {
+        border-top-left-radius: 6px;
+        border-bottom-left-radius: 6px;
+    }
+    td:last-child {
+        border-top-right-radius: 6px;
+        border-bottom-right-radius: 6px;
+    }
+
     th {
-        background-color: #252525;
+        background-color: rgba(45, 45, 45, 0.7);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
         position: sticky;
         top: 0;
-        font-weight: 600;
-        color: #aaa;
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
         z-index: 10;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 1px 0 var(--border-color);
+        padding-top: 14px;
+        padding-bottom: 14px;
     }
     th.sortable {
         cursor: pointer;
         user-select: none;
-        transition: background-color 0.2s;
+        transition: color 0.2s;
     }
     th.sortable:hover {
-        background-color: #333;
+        color: var(--text-main);
     }
     .sort-indicator {
         display: inline-block;
         margin-left: 4px;
         font-size: 0.7em;
         vertical-align: middle;
-        color: #888;
+        color: var(--primary-color);
     }
-    tr:hover {
-        background-color: #2a2a2a;
+    tr:hover td {
+        background-color: rgba(255, 255, 255, 0.08);
     }
     .col-name {
         width: auto;
@@ -505,19 +529,36 @@
         white-space: nowrap;
     }
     .progress-bar {
-        height: 6px;
-        background-color: #333;
-        border-radius: 3px;
+        height: 8px;
+        background-color: rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
         overflow: hidden;
         margin-right: 8px;
         display: inline-block;
         vertical-align: middle;
         width: 80px;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.2);
     }
     .progress-fill {
         height: 100%;
-        background-color: #646cff;
-        transition: width 0.3s ease;
+        background: linear-gradient(90deg, var(--primary-color), var(--primary-hover));
+        transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+    }
+    .progress-fill::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        transform: translateX(-100%);
+        animation: shimmer 1.5s infinite;
+    }
+    @keyframes shimmer {
+        100% { transform: translateX(100%); }
     }
     .progress-text {
         font-size: 0.8rem;

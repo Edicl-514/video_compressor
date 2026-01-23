@@ -130,13 +130,27 @@
         display: flex;
         flex-direction: column;
         gap: 0.5rem;
-        background-color: #1a1a1a;
-        padding: 0.6rem 1.2rem;
-        border-radius: 10px;
-        color: #e0e0e0;
+        
+        /* Glass Style matching Controls */
+        background: rgba(45, 45, 45, 0.6);
+        background: linear-gradient(to bottom, rgba(35, 35, 35, 0.8), rgba(45, 45, 45, 0.6));
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--border-color);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+
+        padding: 0.8rem 1.4rem;
+        border-radius: var(--radius-md);
+        color: var(--text-main);
         font-size: 0.8rem;
-        border: 1px solid #333;
         width: fit-content;
+        transition: all 0.3s ease;
+    }
+    
+    .system-info:hover {
+        background: rgba(50, 50, 50, 0.8);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+        border-color: rgba(255, 255, 255, 0.15);
     }
     .row {
         display: flex;
@@ -163,8 +177,8 @@
     .meter-container {
         flex: 1;
         height: 6px;
-        background-color: #333;
-        border-radius: 3px;
+        background-color: rgba(255,255,255,0.1);
+        border-radius: 100px;
         overflow: hidden;
         min-width: 60px;
     }
@@ -173,6 +187,26 @@
         transition:
             width 0.5s ease-out,
             background 0.5s ease;
+    }
+    .progress-item .meter-bar {
+        position: relative;
+        overflow: hidden;
+    }
+    .progress-item .meter-bar::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+        transform: translateX(-100%);
+        animation: shimmer 1.5s infinite;
+    }
+    @keyframes shimmer {
+        100% {
+            transform: translateX(100%);
+        }
     }
     .info-divider {
         width: 1px;

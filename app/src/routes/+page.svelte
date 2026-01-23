@@ -1202,24 +1202,11 @@
 </main>
 
 <style>
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    font-family:
-      "Inter",
-      system-ui,
-      -apple-system,
-      sans-serif;
-    background-color: #202020;
-    color: #ffffff;
-    height: 100vh;
-    overflow: hidden;
-  }
-
   .container {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    width:100%;
     padding: 1.5rem;
     gap: 1.5rem;
     box-sizing: border-box;
@@ -1264,7 +1251,9 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    background-color: #252525;
+    background: rgba(30, 30, 30, 0.65);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     padding: 1rem;
     border-radius: 12px;
     box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.2);
