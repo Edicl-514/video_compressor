@@ -164,8 +164,10 @@ async fn cancel_processing(
 
         #[cfg(target_os = "windows")]
         {
+             use std::os::windows::process::CommandExt;
              let _ = Command::new("taskkill")
                 .args(&["/F", "/PID", &pid.to_string()])
+                .creation_flags(0x08000000)
                 .output()
                 .map_err(|e| e.to_string())?;
         }
@@ -390,7 +392,7 @@ pub fn run() {
                 vmaf_state: Arc::new(Mutex::new(video::VmafState {
                     queue: std::collections::VecDeque::new(),
                     running_task: None,
-                    crf_history: Vec::new(),
+                    crf_history: HashMap::new(),
                 })),
             });
 

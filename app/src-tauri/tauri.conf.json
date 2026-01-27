@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "app",
+  "productName": "Video Compressor",
   "version": "0.1.0",
-  "identifier": "com.ziyang-gong.app",
+  "identifier": "com.edicl.video-compressor",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "app",
+        "title": "Video Compressor",
         "width": 1280,
         "height": 768,
         "resizable": true,
@@ -25,13 +25,49 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [
+      "../../ffmpeg/bin/ffmpeg.exe",
+      "../../ffmpeg/bin/ffprobe.exe",
+      "../../ffmpeg/bin/*.dll",
+      "../../ffmpeg/bin/model"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "wix": {
+        "language": [
+          "zh-CN",
+          "en-US"
+        ]
+      },
+      "nsis": {
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "headerImage": null,
+        "sidebarImage": null
+      }
+    },
+    "publisher": "Edicl",
+    "copyright": "Copyright © 2026",
+    "category": "Utility",
+    "shortDescription": "Video compression tool with FFmpeg",
+    "longDescription": "A powerful video compression tool with built-in FFmpeg support for various encoding formats and quality settings."
   }
 }

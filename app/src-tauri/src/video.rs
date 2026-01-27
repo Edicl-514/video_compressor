@@ -142,7 +142,8 @@ pub struct VmafState {
     pub running_task: Option<String>,
     /// Historical CRF-VMAF search results from previous tasks
     /// Used by the optimizer to predict CRF for new tasks
-    pub crf_history: Vec<(f32, f64)>,
+    /// Key: (width, height), Value: List of (crf, vmaf) tuples
+    pub crf_history: std::collections::HashMap<(u32, u32), Vec<(f32, f64)>>,
 }
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "m4v", "mpg", "mpeg", "3gp", "ts","asf", "rmvb", "vob","m2ts","f4v","mts","ogv", "divx","xvid","rm"];
@@ -311,7 +312,14 @@ pub fn detect_system_encoders(ffmpeg_path: &str, app: AppHandle) -> DetectionRep
     };
 
     // 1. Get raw list
-    let output = match Command::new(ffmpeg_path).arg("-encoders").output() {
+    let mut command = Command::new(ffmpeg_path);
+    command.arg("-encoders");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = match command.output() {
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
         Err(e) => {
             report.log.push(format!("Failed to run ffmpeg: {}", e));
@@ -353,7 +361,15 @@ pub fn detect_system_encoders(ffmpeg_path: &str, app: AppHandle) -> DetectionRep
             "-c:v", &name, "-f", "null", "-"
         ];
         
-        let available = match Command::new(ffmpeg_path).args(&args).output() {
+        let mut command = Command::new(ffmpeg_path);
+        command.args(&args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        
+        let available = match command.output() {
             Ok(o) if o.status.success() => {
                 let display_name = if is_hw { format!("{} (HW)", name) } else { format!("{} (CPU)", name) };
                 report.video.push(DetectedEncoder {
@@ -384,7 +400,15 @@ pub fn detect_system_encoders(ffmpeg_path: &str, app: AppHandle) -> DetectionRep
             "-t", "1", "-c:a", &name, "-f", "null", "-"
         ];
 
-        let available = match Command::new(ffmpeg_path).args(&args).output() {
+        let mut command = Command::new(ffmpeg_path);
+        command.args(&args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+
+        let available = match command.output() {
             Ok(o) if o.status.success() => {
                 report.audio.push(DetectedEncoder {
                     name: format!("{} (CPU)", name),
@@ -414,15 +438,22 @@ pub fn get_metadata(path: &str, ffprobe_path: &str) -> Result<VideoInfo, String>
 }
 
 fn get_video_info(path: &Path, ffprobe_path: &str) -> Result<VideoInfo, String> {
-    let output = Command::new(ffprobe_path)
-        .args(&[
+    let mut command = Command::new(ffprobe_path);
+    command.args(&[
             "-v", "quiet",
             "-print_format", "json",
             "-show_format",
             "-show_streams",
             path.to_str().ok_or("Invalid path")?,
-        ])
-        .output()
+        ]);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command.output()
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 
     if !output.status.success() {
@@ -1650,7 +1681,7 @@ pub fn run_crf_search(
 
     // Get historical CRF data for optimization
     let crf_history: Vec<(f32, f64)> = if let Ok(state) = vmaf_state.lock() {
-        state.crf_history.clone()
+        state.crf_history.get(&resolution).cloned().unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -1663,10 +1694,11 @@ pub fn run_crf_search(
             
             // Update historical CRF data for future task optimization
             if let Ok(mut state) = vmaf_state.lock() {
-                state.crf_history.push((crf, vmaf));
+                let history = state.crf_history.entry(resolution).or_insert_with(Vec::new);
+                history.push((crf, vmaf));
                 // Keep a reasonable size to avoid memory bloat and maintain relevance
-                if state.crf_history.len() > 50 {
-                    state.crf_history.remove(0);
+                if history.len() > 50 {
+                    history.remove(0);
                 }
             }
             
@@ -1994,11 +2026,18 @@ pub fn run_ffmpeg_compression_task(
 
         println!("Starting Pass 1 for {}", input_path);
         
-        let mut pass1_child = Command::new(ffmpeg_path)
-            .args(&pass1_args)
+        let mut command = Command::new(ffmpeg_path);
+        command.args(&pass1_args)
             .stdout(Stdio::null()) // Use null to avoid blocking if we don't read it
-            .stderr(Stdio::piped()) 
-            .spawn()
+            .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+
+        let mut pass1_child = command.spawn()
             .map_err(|e| {
                 eprintln!("[ERROR] Failed to spawn Pass 1 for '{}': {}", input_path, e);
                 eprintln!("[INFO] FFmpeg path: {}", ffmpeg_path);
@@ -2190,11 +2229,18 @@ pub fn run_ffmpeg_compression_task(
         output_info: None,
     });
 
-    let mut child = Command::new(ffmpeg_path)
-        .args(&args)
+    let mut command = Command::new(ffmpeg_path);
+    command.args(&args)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = command.spawn()
         .map_err(|e| {
             eprintln!("[ERROR] Failed to spawn FFmpeg for '{}': {}", input_path, e);
             eprintln!("[INFO] FFmpeg path: {}", ffmpeg_path);
@@ -2655,9 +2701,15 @@ fn verify_video(ffmpeg_path: &str, file_path: &str) -> Result<(), String> {
         "-"
     ];
 
-    let output = Command::new(ffmpeg_path)
-        .args(&args)
-        .output()
+    let mut command = Command::new(ffmpeg_path);
+    command.args(&args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command.output()
         .map_err(|e| format!("Failed to run verification: {}", e))?;
 
     if !output.status.success() {

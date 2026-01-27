@@ -13,7 +13,6 @@ Thumbs.db
 node_modules/
 .svelte-kit/
 build/
-dist/
 package/
 .env
 .env.*
@@ -26,8 +25,20 @@ target/
 app/src-tauri/gen/schemas/
 Cargo.lock.tmp
 
-# ffmpeg binaries
-/ffmpeg/
+# Build outputs
+dist/
+*.exe
+*.msi
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+
+# FFmpeg
+/ffmpeg/bin/*.exe
+/ffmpeg/bin/*.dll
+/ffmpeg/bin/*.lib
+/ffmpeg/bin/*.zip
 
 # Logs
 *.log
@@ -36,7 +47,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Documentation
-doc.md
+/doc
 
 
 压缩.py

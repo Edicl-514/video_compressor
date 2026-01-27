@@ -731,6 +731,9 @@
     // Prevent multiple simultaneous starts (except when resuming from pause)
     if (isProcessing && !isPaused) return;
 
+    // Reset stop flag at the start
+    shouldStop = false;
+
     // Check if there are any files to process
     const pendingFiles = files.filter(
       (f) => f.status !== "Done" && f.status !== "Error",
@@ -797,9 +800,13 @@
     }
 
     console.log("Start clicked");
+
+    // Reset all state flags to ensure clean start
+    shouldStop = false;
     isProcessing = true;
     isPaused = false;
-    shouldStop = false;
+    activeCompressions = 0;
+    isSearching = false;
 
     // Helper functions for sorting (same as FileList.svelte)
     function parseResolution(res: string): number {
@@ -855,7 +862,14 @@
     // Reset Cancelled files to Pending before filtering
     for (let i = 0; i < files.length; i++) {
       if (files[i].status === "Cancelled") {
-        files[i] = { ...files[i], status: "Pending", progress: 0 };
+        files[i] = {
+          ...files[i],
+          status: "Pending",
+          progress: 0,
+          vmafSearchEndProgress: undefined,
+          foundCrf: undefined,
+          foundVmafScore: undefined,
+        };
       }
     }
 
@@ -976,7 +990,11 @@
       // Run compression
       runCompressionTask(i).finally(() => {
         activeCompressions--;
-        processCompressionQueue(); // Trigger next
+
+        // Only continue processing if not stopped
+        if (!shouldStop) {
+          processCompressionQueue(); // Trigger next
+        }
 
         // Check if all done
         if (
@@ -1105,11 +1123,10 @@
     // Wait for all cancellations to hit backend
     await Promise.all(promises);
 
-    // Force reset global state to ensure UI unlocks
-    // We do this after cancellations to avoid race conditions where Start is clicked too early
+    // Reset UI state
     isProcessing = false;
     isSearching = false;
-    activeCompressions = 0;
+    // Note: activeCompressions will be reset in handleStart for clean state
   }
 
   function handleSettings() {
@@ -1206,21 +1223,13 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    width:100%;
+    width: 100%;
     padding: 1.5rem;
     gap: 1.5rem;
     box-sizing: border-box;
     max-width: 1400px;
     margin: 0 auto;
     position: relative;
-  }
-
-  .header h1 {
-    font-size: 1.5rem;
-    font-weight: 700;
-    margin: 0;
-    color: #f0f0f0;
-    letter-spacing: -0.02em;
   }
 
   .content-area {
