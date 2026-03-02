@@ -22,6 +22,78 @@ struct ProcessingState {
     vmaf_state: Arc<Mutex<video::VmafState>>,
 }
 
+// Helper function to resolve FFmpeg path from bundled resources
+fn resolve_ffmpeg_path(app: &AppHandle) -> String {
+    // Try bundled resource directory first
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled_path = resource_dir.join("ffmpeg/bin/ffmpeg.exe");
+        if bundled_path.exists() {
+            if let Some(path_str) = bundled_path.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 1: Try relative path from dev build
+    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    if ffmpeg_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&ffmpeg_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 2: Try project root relative path
+    let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+    if root_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&root_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Last resort: hope it's in PATH
+    "ffmpeg.exe".to_string()
+}
+
+// Helper function to resolve FFprobe path from bundled resources
+fn resolve_ffprobe_path(app: &AppHandle) -> String {
+    // Try bundled resource directory first
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled_path = resource_dir.join("ffmpeg/bin/ffprobe.exe");
+        if bundled_path.exists() {
+            if let Some(path_str) = bundled_path.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 1: Try relative path from dev build
+    let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
+    if ffprobe_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&ffprobe_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 2: Try project root relative path
+    let root_rel = PathBuf::from("ffmpeg/bin/ffprobe.exe");
+    if root_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&root_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Last resort: hope it's in PATH
+    "ffprobe.exe".to_string()
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -74,44 +146,15 @@ async fn categorize_paths(paths: Vec<String>) -> Result<video::PathCategorizatio
 }
 
 #[tauri::command]
-async fn get_video_metadata(path: String) -> Result<video::VideoInfo, String> {
-    // Determine ffprobe path
-    let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
-    let ffprobe_path = if ffprobe_rel.exists() {
-         std::fs::canonicalize(&ffprobe_rel).unwrap_or(ffprobe_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffprobe.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffprobe.exe")
-        }
-    };
-
-    video::get_metadata(&path, ffprobe_path.to_str().unwrap_or(""))
+async fn get_video_metadata(app: AppHandle, path: String) -> Result<video::VideoInfo, String> {
+    let ffprobe_path = resolve_ffprobe_path(&app);
+    video::get_metadata(&path, &ffprobe_path)
 }
 
 #[tauri::command]
 async fn detect_encoders(app: AppHandle) -> Result<video::DetectionReport, String> {
-    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
-    let ffmpeg_path = if ffmpeg_rel.exists() {
-         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
-        }
-    };
-    
-    let path_str = if ffmpeg_path.exists() {
-        ffmpeg_path.to_str().unwrap_or("ffmpeg").to_string()
-    } else {
-        "ffmpeg".to_string()
-    };
-
-    Ok(video::detect_system_encoders(&path_str, app))
+    let ffmpeg_path = resolve_ffmpeg_path(&app);
+    Ok(video::detect_system_encoders(&ffmpeg_path, app))
 }
 
 #[tauri::command]
@@ -123,19 +166,7 @@ async fn start_processing(
     config: video::CompressionConfig,
     duration_sec: f64
 ) -> Result<(), String> {
-    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
-    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
-         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
-        }
-    };
-    
-    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+    let ffmpeg_path = resolve_ffmpeg_path(&app);
     let pids = state.pids.clone();
     let cancelled_paths = state.cancelled_paths.clone();
     let vmaf_state = state.vmaf_state.clone();
@@ -235,31 +266,8 @@ async fn compute_vmaf(
     config: video::CompressionConfig,
     duration_sec: f64
 ) -> Result<(), String> {
-    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
-    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
-         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
-        }
-    };
-    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
-
-    let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
-    let ffprobe_path_buf = if ffprobe_rel.exists() {
-         std::fs::canonicalize(&ffprobe_rel).unwrap_or(ffprobe_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffprobe.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffprobe.exe")
-        }
-    };
-    let ffprobe_path = ffprobe_path_buf.to_str().unwrap_or("ffprobe").to_string();
+    let ffmpeg_path = resolve_ffmpeg_path(&app);
+    let ffprobe_path = resolve_ffprobe_path(&app);
 
     // Fetch output info
     let output_video_info = video::get_metadata(&output_path, &ffprobe_path).ok();
@@ -304,18 +312,7 @@ async fn run_crf_search_command(
     config: video::CompressionConfig,
     duration_sec: f64
 ) -> Result<(f32, f64), String> {
-    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
-    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
-         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
-        }
-    };
-    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+    let ffmpeg_path = resolve_ffmpeg_path(&app);
     
     let pids = state.pids.clone();
     let cancelled_paths = state.cancelled_paths.clone();
@@ -346,18 +343,7 @@ async fn run_compression_command(
     vmaf_derived_crf: Option<f32>,
     vmaf_search_score: Option<f64>
 ) -> Result<(), String> {
-    let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
-    let ffmpeg_path_buf = if ffmpeg_rel.exists() {
-         std::fs::canonicalize(&ffmpeg_rel).unwrap_or(ffmpeg_rel)
-    } else {
-        let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
-        if root_rel.exists() {
-            std::fs::canonicalize(&root_rel).unwrap_or(root_rel)
-        } else {
-            PathBuf::from("d:/code/video_compressor/ffmpeg/bin/ffmpeg.exe")
-        }
-    };
-    let ffmpeg_path = ffmpeg_path_buf.to_str().unwrap_or("ffmpeg").to_string();
+    let ffmpeg_path = resolve_ffmpeg_path(&app);
     
     let pids = state.pids.clone();
     let cancelled_paths = state.cancelled_paths.clone();
