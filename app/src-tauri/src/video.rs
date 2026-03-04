@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use walkdir::WalkDir;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1026,7 +1026,7 @@ fn search_optimal_crf(
     
     println!("Selected VMAF model for search: {} (Resolution: {}x{}, Neg: {})", model_filename, width, height, config.vmaf_neg);
     
-    let model_path = find_vmaf_model(ffmpeg_path, model_filename)
+    let model_path = find_vmaf_model(app, ffmpeg_path, model_filename)
         .ok_or_else(|| format!("VMAF model {} not found", model_filename))?;
 
     let max_iterations = 10u32;
@@ -2791,30 +2791,80 @@ pub fn schedule_next_vmaf(vmaf_state: std::sync::Arc<std::sync::Mutex<VmafState>
 
 // --- VMAF Calculation Logic ---
 
-fn find_vmaf_model(ffmpeg_path: &str, model_filename: &str) -> Option<String> {
-    // 1. Check env var
+fn find_vmaf_model(app: &AppHandle, ffmpeg_path: &str, model_filename: &str) -> Option<String> {
+    println!("[DEBUG] Searching for VMAF model: {}", model_filename);
+    
+    // 1. Check bundled resource directory first (for packaged app)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        // Try both possible locations in bundled resources
+        let potential_paths = vec![
+            resource_dir.join("ffmpeg/bin/model").join(model_filename),
+            resource_dir.join("ffmpeg/model").join(model_filename),  // Alternative structure
+        ];
+        
+        for bundled_model in potential_paths {
+            println!("[DEBUG] Checking bundled path: {:?}", bundled_model);
+            if bundled_model.exists() {
+                if let Some(path_str) = bundled_model.to_str() {
+                    println!("[DEBUG] Found VMAF model at bundled: {}", path_str);
+                    return Some(path_str.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. Check env var
     if let Ok(env_path) = std::env::var("VMAF_MODEL") {
         if Path::new(&env_path).exists() {
+            println!("[DEBUG] Found VMAF model at env var: {}", env_path);
             return Some(env_path);
         }
     }
 
-    // 2. ffmpeg/bin/model/model_filename
+    // 3. ffmpeg/bin/model/model_filename (dev build - relative to ffmpeg binary)
     let ffmpeg_dir = Path::new(ffmpeg_path).parent();
     if let Some(dir) = ffmpeg_dir {
          let model_json = dir.join("model").join(model_filename);
+         println!("[DEBUG] Checking from ffmpeg dir: {:?}", model_json);
          if model_json.exists() {
+             println!("[DEBUG] Found VMAF model at ffmpeg dir: {:?}", model_json);
              return Some(model_json.to_string_lossy().to_string());
          }
 
           // Try typical share location: ../share/model/
          let share_model = dir.parent().unwrap_or(Path::new("")).join("share").join("model").join(model_filename);
          if share_model.exists() {
+             println!("[DEBUG] Found VMAF model at share: {:?}", share_model);
              return Some(share_model.to_string_lossy().to_string());
          }
     }
 
-    // 3. Fallbacks
+    // 4. Try relative to current working directory (dev mode)
+    let dev_paths = vec![
+        Path::new("ffmpeg/bin/model").join(model_filename),
+        Path::new("../ffmpeg/bin/model").join(model_filename),
+        Path::new("../../ffmpeg/bin/model").join(model_filename),
+        Path::new("ffmpeg/model").join(model_filename),           // Alternative structure
+        Path::new("../ffmpeg/model").join(model_filename),        // Alternative structure
+        Path::new("../../ffmpeg/model").join(model_filename),     // Alternative structure
+    ];
+    
+    for path in dev_paths {
+        println!("[DEBUG] Checking dev path: {:?}", path);
+        if path.exists() {
+            if let Some(path_str) = path.to_str() {
+                println!("[DEBUG] Found VMAF model at dev path: {}", path_str);
+                if let Ok(canonical) = std::fs::canonicalize(&path) {
+                    if let Some(canonical_str) = canonical.to_str() {
+                        return Some(canonical_str.to_string());
+                    }
+                }
+                return Some(path_str.to_string());
+            }
+        }
+    }
+
+    // 5. System fallbacks
     let candidates = vec![
         format!(r"C:\Program Files\FFmpeg\share\model\{}", model_filename),
         format!(r"C:\Program Files\ffmpeg\share\model\{}", model_filename),
@@ -2824,10 +2874,12 @@ fn find_vmaf_model(ffmpeg_path: &str, model_filename: &str) -> Option<String> {
 
     for c in candidates {
         if Path::new(&c).exists() {
+            println!("[DEBUG] Found VMAF model at system path: {}", c);
             return Some(c);
         }
     }
 
+    println!("[DEBUG] VMAF model {} not found in any location", model_filename);
     None
 }
 
@@ -2923,7 +2975,7 @@ fn calculate_vmaf_score(
 
     println!("Selected VMAF model: {} (Resolution: {}x{}, Neg: {})", model_filename, width, height, config.vmaf_neg);
 
-    let model_path_opt = find_vmaf_model(ffmpeg_path, model_filename);
+    let model_path_opt = find_vmaf_model(app, ffmpeg_path, model_filename);
     if model_path_opt.is_none() {
         println!("VMAF Calculation skipped: Model file {} not found.", model_filename);
         return;

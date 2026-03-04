@@ -24,21 +24,35 @@ struct ProcessingState {
 
 // Helper function to resolve FFmpeg path from bundled resources
 fn resolve_ffmpeg_path(app: &AppHandle) -> String {
+    println!("[DEBUG] Resolving ffmpeg path...");
+    
     // Try bundled resource directory first
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let bundled_path = resource_dir.join("ffmpeg/bin/ffmpeg.exe");
-        if bundled_path.exists() {
-            if let Some(path_str) = bundled_path.to_str() {
-                return path_str.to_string();
+        println!("[DEBUG] Resource dir: {:?}", resource_dir);
+        // Try multiple possible paths in bundled resources
+        let bundled_candidates = vec![
+            resource_dir.join("ffmpeg/bin/ffmpeg.exe"),  // Standard: bin subdirectory
+            resource_dir.join("ffmpeg/ffmpeg.exe"),       // Alternative: direct in ffmpeg dir
+        ];
+        
+        for bundled_path in bundled_candidates {
+            println!("[DEBUG] Checking bundled path: {:?}", bundled_path);
+            if bundled_path.exists() {
+                if let Some(path_str) = bundled_path.to_str() {
+                    println!("[DEBUG] Found bundled ffmpeg at: {}", path_str);
+                    return path_str.to_string();
+                }
             }
         }
     }
 
     // Fallback 1: Try relative path from dev build
     let ffmpeg_rel = PathBuf::from("../ffmpeg/bin/ffmpeg.exe");
+    println!("[DEBUG] Checking relative path: {:?}", ffmpeg_rel);
     if ffmpeg_rel.exists() {
         if let Ok(canonical) = std::fs::canonicalize(&ffmpeg_rel) {
             if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffmpeg at: {}", path_str);
                 return path_str.to_string();
             }
         }
@@ -46,35 +60,83 @@ fn resolve_ffmpeg_path(app: &AppHandle) -> String {
 
     // Fallback 2: Try project root relative path
     let root_rel = PathBuf::from("ffmpeg/bin/ffmpeg.exe");
+    println!("[DEBUG] Checking root relative path: {:?}", root_rel);
     if root_rel.exists() {
         if let Ok(canonical) = std::fs::canonicalize(&root_rel) {
             if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffmpeg at: {}", path_str);
                 return path_str.to_string();
             }
         }
     }
 
+    // Fallback 3: Try one more level up
+    let up_rel = PathBuf::from("../../ffmpeg/bin/ffmpeg.exe");
+    println!("[DEBUG] Checking ../../ relative path: {:?}", up_rel);
+    if up_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&up_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffmpeg at: {}", path_str);
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 4: Try alternative paths (direct ffmpeg folder)
+    let alt_paths = vec![
+        PathBuf::from("ffmpeg/ffmpeg.exe"),
+        PathBuf::from("../ffmpeg/ffmpeg.exe"),
+        PathBuf::from("../../ffmpeg/ffmpeg.exe"),
+    ];
+    
+    for alt_path in alt_paths {
+        println!("[DEBUG] Checking alternative path: {:?}", alt_path);
+        if alt_path.exists() {
+            if let Ok(canonical) = std::fs::canonicalize(&alt_path) {
+                if let Some(path_str) = canonical.to_str() {
+                    println!("[DEBUG] Found ffmpeg at: {}", path_str);
+                    return path_str.to_string();
+                }
+            }
+        }
+    }
+
     // Last resort: hope it's in PATH
+    println!("[DEBUG] FFmpeg not found, using PATH");
     "ffmpeg.exe".to_string()
 }
 
 // Helper function to resolve FFprobe path from bundled resources
 fn resolve_ffprobe_path(app: &AppHandle) -> String {
+    println!("[DEBUG] Resolving ffprobe path...");
+    
     // Try bundled resource directory first
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let bundled_path = resource_dir.join("ffmpeg/bin/ffprobe.exe");
-        if bundled_path.exists() {
-            if let Some(path_str) = bundled_path.to_str() {
-                return path_str.to_string();
+        println!("[DEBUG] Resource dir: {:?}", resource_dir);
+        // Try multiple possible paths in bundled resources
+        let bundled_candidates = vec![
+            resource_dir.join("ffmpeg/bin/ffprobe.exe"),  // Standard: bin subdirectory
+            resource_dir.join("ffmpeg/ffprobe.exe"),       // Alternative: direct in ffmpeg dir
+        ];
+        
+        for bundled_path in bundled_candidates {
+            println!("[DEBUG] Checking bundled path: {:?}", bundled_path);
+            if bundled_path.exists() {
+                if let Some(path_str) = bundled_path.to_str() {
+                    println!("[DEBUG] Found bundled ffprobe at: {}", path_str);
+                    return path_str.to_string();
+                }
             }
         }
     }
 
     // Fallback 1: Try relative path from dev build
     let ffprobe_rel = PathBuf::from("../ffmpeg/bin/ffprobe.exe");
+    println!("[DEBUG] Checking relative path: {:?}", ffprobe_rel);
     if ffprobe_rel.exists() {
         if let Ok(canonical) = std::fs::canonicalize(&ffprobe_rel) {
             if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffprobe at: {}", path_str);
                 return path_str.to_string();
             }
         }
@@ -82,15 +144,49 @@ fn resolve_ffprobe_path(app: &AppHandle) -> String {
 
     // Fallback 2: Try project root relative path
     let root_rel = PathBuf::from("ffmpeg/bin/ffprobe.exe");
+    println!("[DEBUG] Checking root relative path: {:?}", root_rel);
     if root_rel.exists() {
         if let Ok(canonical) = std::fs::canonicalize(&root_rel) {
             if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffprobe at: {}", path_str);
                 return path_str.to_string();
             }
         }
     }
 
+    // Fallback 3: Try one more level up
+    let up_rel = PathBuf::from("../../ffmpeg/bin/ffprobe.exe");
+    println!("[DEBUG] Checking ../../ relative path: {:?}", up_rel);
+    if up_rel.exists() {
+        if let Ok(canonical) = std::fs::canonicalize(&up_rel) {
+            if let Some(path_str) = canonical.to_str() {
+                println!("[DEBUG] Found ffprobe at: {}", path_str);
+                return path_str.to_string();
+            }
+        }
+    }
+
+    // Fallback 4: Try alternative paths (direct ffmpeg folder)
+    let alt_paths = vec![
+        PathBuf::from("ffmpeg/ffprobe.exe"),
+        PathBuf::from("../ffmpeg/ffprobe.exe"),
+        PathBuf::from("../../ffmpeg/ffprobe.exe"),
+    ];
+    
+    for alt_path in alt_paths {
+        println!("[DEBUG] Checking alternative path: {:?}", alt_path);
+        if alt_path.exists() {
+            if let Ok(canonical) = std::fs::canonicalize(&alt_path) {
+                if let Some(path_str) = canonical.to_str() {
+                    println!("[DEBUG] Found ffprobe at: {}", path_str);
+                    return path_str.to_string();
+                }
+            }
+        }
+    }
+
     // Last resort: hope it's in PATH
+    println!("[DEBUG] FFprobe not found, using PATH");
     "ffprobe.exe".to_string()
 }
 
