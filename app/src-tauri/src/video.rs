@@ -797,7 +797,7 @@ fn compute_sample_vmaf(
     // Filter Complex - note: [0:v] is distorted (sample), [1:v] is reference
     let filter = if use_cuda {
         format!(
-            "[0:v]scale_cuda=format=yuv420p[dis];[1:v]scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
+            "[0:v]setpts=PTS-STARTPTS,scale_cuda=format=yuv420p[dis];[1:v]setpts=PTS-STARTPTS,scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
             vmaf_opts
         )
     } else {
@@ -3210,7 +3210,7 @@ fn run_vmaf_instance(
     // Filter Complex
     let filter = if use_cuda {
         format!(
-            "[0:v]scale_cuda=format=yuv420p[dis];[1:v]scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
+            "[0:v]setpts=PTS-STARTPTS,scale_cuda=format=yuv420p[dis];[1:v]setpts=PTS-STARTPTS,scale_cuda=format=yuv420p[ref];[dis][ref]libvmaf_cuda={}", 
             vmaf_opts
         )
     } else {
